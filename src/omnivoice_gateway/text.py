@@ -67,7 +67,9 @@ _QUOTE = re.compile(r"^[ \t]*(?:>[ \t]?)+", re.MULTILINE)
 _BULLET = re.compile(r"^[ \t]*(?:[-*+•]|\d{1,9}[.)])[ \t]+", re.MULTILINE)
 _STRONG = re.compile(r"(\*\*|__|~~)(?!\s)(.+?)(?<!\s)\1")
 # Single delimiters only around words, so "2*3" and snake_case survive.
-_EM = re.compile(r"(?<![\w*])\*(?!\s)(.+?)(?<!\s)\*(?![\w*])|(?<![\w_])_(?!\s)(.+?)(?<!\s)_(?![\w_])")
+_EM = re.compile(
+    r"(?<![\w*])\*(?!\s)(.+?)(?<!\s)\*(?![\w*])|(?<![\w_])_(?!\s)(.+?)(?<!\s)_(?![\w_])"
+)
 # Unpaired leftovers (e.g. bold spanning lines) that the normalizer would read as symbols.
 _STRAY = re.compile(r"\*{2,}|~{2,}")
 _EMOJI = re.compile(
@@ -88,7 +90,10 @@ _NONVERBAL = re.compile(
     r"|surprise-ah|surprise-oh|surprise-wa|surprise-yo|dissatisfaction-hnn)\]"
 )
 # CMU pronunciation override: uppercase ARPAbet phones, vowels optionally with a stress digit.
-_PHONE = r"(?:AA|AE|AH|AO|AW|AY|B|CH|DH|D|EH|ER|EY|F|G|HH|IH|IY|JH|K|L|M|NG|N|OW|OY|P|R|SH|S|TH|T|UH|UW|V|W|Y|ZH|Z)[0-2]?"
+_PHONE = (
+    r"(?:AA|AE|AH|AO|AW|AY|B|CH|DH|D|EH|ER|EY|F|G|HH|IH|IY|JH|K|L|M|NG|N"
+    r"|OW|OY|P|R|SH|S|TH|T|UH|UW|V|W|Y|ZH|Z)[0-2]?"
+)
 # One capture group so re.split alternates text segments and protected spans.
 _PROTECTED = re.compile(rf"({_NONVERBAL.pattern}|\[{_PHONE}(?: {_PHONE})*\])")
 _LEADING_PUNCT = re.compile(r"[\s,.;:!?…]*")
@@ -115,7 +120,9 @@ def load_lexicon(path: str | Path) -> dict[str, str]:
             raise ValueError(f"{path}: header must be {','.join(LEXICON_FIELDS)}")
         lexicon = {}
         for row in reader:
-            word, replacement = (unicodedata.normalize("NFC", (row[key] or "").strip()) for key in LEXICON_FIELDS[:2])
+            word, replacement = (
+                unicodedata.normalize("NFC", (row[key] or "").strip()) for key in LEXICON_FIELDS[:2]
+            )
             if not word and not replacement:
                 continue
             if not word or not replacement:
@@ -134,8 +141,12 @@ class Pipeline:
         # keep matches on word boundaries so an entry never fires inside a longer word.
         words = sorted(lexicon, key=len, reverse=True)
         self._lexicon = lexicon
-        self._lexicon_re = re.compile(rf"(?<!\w)(?:{'|'.join(map(re.escape, words))})(?!\w)") if words else None
-        digest = hashlib.sha256(json.dumps(sorted(lexicon.items()), ensure_ascii=False).encode()).hexdigest()
+        self._lexicon_re = (
+            re.compile(rf"(?<!\w)(?:{'|'.join(map(re.escape, words))})(?!\w)") if words else None
+        )
+        digest = hashlib.sha256(
+            json.dumps(sorted(lexicon.items()), ensure_ascii=False).encode()
+        ).hexdigest()
         self.version = f"{RULES_VERSION}-{digest[:8]}"
 
     def process(self, text: str, *, vietnamese: bool) -> tuple[str, list[str]]:
@@ -165,12 +176,19 @@ class Pipeline:
         parts = _PROTECTED.split(text)
         segments = [part.replace("[", " ").replace("]", " ") for part in parts[::2]]
         if self._lexicon_re:
-            segments = [self._lexicon_re.sub(lambda m: self._lexicon[m.group()], seg) for seg in segments]
+            segments = [
+                self._lexicon_re.sub(lambda m: self._lexicon[m.group()], seg) for seg in segments
+            ]
         # sea-g2p drops a comma that starts its input, so punctuation right after a tag stays out.
         leads = [_LEADING_PUNCT.match(seg).group() for seg in segments]
-        segments = [seg[len(lead) :] for seg, lead in zip(segments, leads)]
-        spoken = iter(_normalizer.normalize_batch([seg for seg in segments if seg.strip()], punc_norm=False))
-        segments = [lead + (_unwrap_en(next(spoken)) if seg.strip() else "") for seg, lead in zip(segments, leads)]
+        segments = [seg[len(lead) :] for seg, lead in zip(segments, leads, strict=True)]
+        spoken = iter(
+            _normalizer.normalize_batch([seg for seg in segments if seg.strip()], punc_norm=False)
+        )
+        segments = [
+            lead + (_unwrap_en(next(spoken)) if seg.strip() else "")
+            for seg, lead in zip(segments, leads, strict=True)
+        ]
         parts[::2] = segments
         return " ".join(parts)
 
@@ -207,7 +225,9 @@ def _clean(text: str) -> tuple[str, list[str]]:
 def _unwrap_en(text: str) -> str:
     # Spelled letters become one uppercase acronym so the reading stays consistent; final
     # reading policy is decided by the listening run, the lexicon overrides per word.
-    return _EN.sub(lambda m: _LETTER_RUN.sub(lambda r: r.group().replace(" ", "").upper(), m.group(1)), text)
+    return _EN.sub(
+        lambda m: _LETTER_RUN.sub(lambda r: r.group().replace(" ", "").upper(), m.group(1)), text
+    )
 
 
 def _ends_clause(text: str) -> bool:

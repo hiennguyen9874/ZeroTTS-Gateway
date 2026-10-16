@@ -8,7 +8,12 @@ import httpx
 import pytest
 
 SPEECH = "/v1/audio/speech"
-BODY = {"model": "g-omnivoice-stream", "input": "Xin chào.", "response_format": "pcm", "stream_format": "audio"}
+BODY = {
+    "model": "g-omnivoice-stream",
+    "input": "Xin chào.",
+    "response_format": "pcm",
+    "stream_format": "audio",
+}
 CLOSE_WAIT_S = 2
 
 SSE = (
@@ -35,7 +40,10 @@ def test_first_byte_reaches_caller_before_upstream_finishes(live_gateway, upstre
     stream = upstream.stream(b"\x01\x02\x03", gate, b"\x04\x05")
     base = live_gateway()
 
-    with httpx.Client(base_url=base, timeout=5) as caller, caller.stream("POST", SPEECH, json=BODY) as response:
+    with (
+        httpx.Client(base_url=base, timeout=5) as caller,
+        caller.stream("POST", SPEECH, json=BODY) as response,
+    ):
         chunks = response.iter_raw()
         assert response.status_code == 200
         assert next(chunks) == b"\x01\x02\x03"
@@ -64,16 +72,20 @@ def test_odd_chunks_and_sse_events_arrive_intact(live_gateway, upstream, content
 
 def read_until_abort(base: str) -> bytes:
     received = b""
-    with pytest.raises(httpx.RemoteProtocolError):
-        with httpx.stream("POST", base + SPEECH, json=BODY, timeout=5) as response:
-            assert response.status_code == 200
-            for chunk in response.iter_raw():
-                received += chunk
+    with (
+        pytest.raises(httpx.RemoteProtocolError),
+        httpx.stream("POST", base + SPEECH, json=BODY, timeout=5) as response,
+    ):
+        assert response.status_code == 200
+        for chunk in response.iter_raw():
+            received += chunk
     return received
 
 
 def test_upstream_break_mid_stream_aborts_caller(live_gateway, upstream):
-    stream = upstream.stream(b"\x01\x02", 0.05, b"\x03", httpx.ReadError("upstream connection reset"))
+    stream = upstream.stream(
+        b"\x01\x02", 0.05, b"\x03", httpx.ReadError("upstream connection reset")
+    )
     base = live_gateway()
 
     assert read_until_abort(base) == b"\x01\x02\x03"
@@ -85,7 +97,10 @@ def test_caller_disconnect_closes_upstream(live_gateway, upstream):
     stream = upstream.stream(b"\x01", threading.Event())  # never finishes on its own
     base = live_gateway()
 
-    with httpx.Client(base_url=base, timeout=5) as caller, caller.stream("POST", SPEECH, json=BODY) as response:
+    with (
+        httpx.Client(base_url=base, timeout=5) as caller,
+        caller.stream("POST", SPEECH, json=BODY) as response,
+    ):
         assert next(response.iter_raw()) == b"\x01"
 
     assert stream.closed.wait(CLOSE_WAIT_S)
@@ -133,14 +148,18 @@ def test_stream_log_has_ttfb_and_total_without_text(client, upstream, caplog):
 
 @pytest.mark.parametrize(
     ("steps", "stream_end"),
-    [((b"\x01", httpx.ReadError("reset")), "upstream_disconnected"), ((b"\x01", 1.0, b"\x02"), "upstream_timeout")],
+    [
+        ((b"\x01", httpx.ReadError("reset")), "upstream_disconnected"),
+        ((b"\x01", 1.0, b"\x02"), "upstream_timeout"),
+    ],
 )
 def test_stream_log_records_abort_reason(make_client, upstream, caplog, steps, stream_end):
     caplog.set_level(logging.INFO, logger="omnivoice_gateway")
     upstream.stream(*steps)
     client = make_client(deadline_s=0.3)
 
-    with pytest.raises(Exception):
+    # TestClient re-raises the in-app abort; the type is internal, only the drop is observable.
+    with pytest.raises(Exception):  # noqa: B017
         client.post(SPEECH, json=BODY)
 
     fields = [r.fields for r in caplog.records if r.name == "omnivoice_gateway"][-1]

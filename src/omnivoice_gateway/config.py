@@ -39,7 +39,9 @@ def load_settings(path: str | Path | None = None, env: Mapping[str, str] = os.en
             data = tomllib.load(f)
     if data.get("lexicon_path"):
         data["lexicon_path"] = str(Path(path).parent / data["lexicon_path"])
-    models = {model_id: ModelDefaults(**values) for model_id, values in data.pop("models", {}).items()}
+    models = {
+        model_id: ModelDefaults(**values) for model_id, values in data.pop("models", {}).items()
+    }
     if env.get(ENV_UPSTREAM_URL):
         data["upstream_url"] = env[ENV_UPSTREAM_URL]
     return Settings(**data, api_key=env.get(ENV_API_KEY) or None, models=models)

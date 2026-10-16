@@ -30,4 +30,17 @@ testpaths = ["tests"]
 [dependency-groups]
 dev = [
     "pytest>=9.1.1",
+    "ruff>=0.8",
 ]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+extend-exclude = ["references", "models", "voices_candidates", ".pi"]
+
+[tool.ruff.format]
+# Scope is Python code; leave code blocks in docs as written.
+exclude = ["*.md"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM"]

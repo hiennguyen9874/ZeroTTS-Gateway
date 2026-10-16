@@ -25,11 +25,17 @@ class GatewayError(Exception):
 
 
 class StreamAborted(Exception):
-    """Raised inside a started response body so the server drops the connection instead of ending the stream."""
+    """Raised inside a started response body.
+
+    The server then drops the connection instead of ending the stream.
+    """
 
 
 class RequestLog:
-    """Logs one content-free record per request after the response body has been fully sent (or aborted)."""
+    """Logs one content-free record per request.
+
+    The record is written after the response body has been fully sent (or aborted).
+    """
 
     def __init__(self, app):
         self.app = app
@@ -63,10 +69,15 @@ class RequestLog:
 
 
 class UpstreamStreamingResponse(StreamingResponse):
-    """Streams an upstream body; always closes the upstream response, also when the caller disconnects."""
+    """Streams an upstream body.
+
+    Always closes the upstream response, also when the caller disconnects.
+    """
 
     def __init__(self, upstream: httpx.Response, body, fields: dict, headers: dict[str, str]):
-        super().__init__(body, upstream.status_code, headers, media_type=upstream.headers.get("content-type"))
+        super().__init__(
+            body, upstream.status_code, headers, media_type=upstream.headers.get("content-type")
+        )
         self.upstream, self.fields = upstream, fields
 
     async def __call__(self, scope, receive, send):
@@ -112,24 +123,36 @@ def create_app(settings: Settings, transport: httpx.AsyncBaseTransport | None = 
         if settings.api_key is None:
             return
         scheme, _, token = (authorization or "").partition(" ")
-        if scheme.lower() != "bearer" or not hmac.compare_digest(token.encode(), settings.api_key.encode()):
+        if scheme.lower() != "bearer" or not hmac.compare_digest(
+            token.encode(), settings.api_key.encode()
+        ):
             raise GatewayError(401, "unauthorized", "missing or invalid API key")
 
-    async def forward(request: Request, method: str, path: str, body: dict | None = None) -> Response:
+    async def forward(
+        request: Request, method: str, path: str, body: dict | None = None
+    ) -> Response:
         if request.url.query:
             path = f"{path}?{request.url.query}"
         try:
             async with asyncio.timeout(settings.deadline_s):
                 upstream = await client.request(method, path, json=body)
         except TimeoutError:
-            raise GatewayError(504, "upstream_timeout", "upstream did not respond before the deadline")
+            raise GatewayError(
+                504, "upstream_timeout", "upstream did not respond before the deadline"
+            ) from None
         except httpx.TransportError:
-            raise GatewayError(502, "upstream_unavailable", "could not connect to upstream")
+            raise GatewayError(
+                502, "upstream_unavailable", "could not connect to upstream"
+            ) from None
         request.state.log["upstream_status"] = upstream.status_code
-        return Response(upstream.content, upstream.status_code, media_type=upstream.headers.get("content-type"))
+        return Response(
+            upstream.content, upstream.status_code, media_type=upstream.headers.get("content-type")
+        )
 
     async def stream(request: Request, path: str, body: dict, headers: dict[str, str]) -> Response:
-        """One upstream request, no retry. Each chunk is passed on as it arrives; `headers` go on success only.
+        """One upstream request, no retry.
+
+        Each chunk is passed on as it arrives; `headers` go on success only.
 
         The deadline is absolute: before the first body byte it becomes a 504; after that the
         caller connection is aborted, as it is when the upstream breaks mid-stream.
@@ -139,22 +162,32 @@ def create_app(settings: Settings, transport: httpx.AsyncBaseTransport | None = 
         start = time.perf_counter()
         try:
             async with asyncio.timeout_at(deadline):
-                upstream = await client.send(client.build_request("POST", path, json=body), stream=True)
+                upstream = await client.send(
+                    client.build_request("POST", path, json=body), stream=True
+                )
                 try:
                     fields["upstream_status"] = upstream.status_code
                     if not upstream.is_success:
                         # Upstream errors are small JSON bodies; pass them through whole.
                         content = await upstream.aread()
-                        return Response(content, upstream.status_code, media_type=upstream.headers.get("content-type"))
+                        return Response(
+                            content,
+                            upstream.status_code,
+                            media_type=upstream.headers.get("content-type"),
+                        )
                     chunks = upstream.aiter_raw()
                     first = await anext(chunks, b"")
                 except BaseException:
                     await upstream.aclose()
                     raise
         except TimeoutError:
-            raise GatewayError(504, "upstream_timeout", "upstream did not respond before the deadline")
+            raise GatewayError(
+                504, "upstream_timeout", "upstream did not respond before the deadline"
+            ) from None
         except httpx.TransportError:
-            raise GatewayError(502, "upstream_unavailable", "could not connect to upstream")
+            raise GatewayError(
+                502, "upstream_unavailable", "could not connect to upstream"
+            ) from None
         fields["upstream_ttfb_ms"] = elapsed_ms(start)
 
         async def body():
@@ -187,9 +220,11 @@ def create_app(settings: Settings, transport: httpx.AsyncBaseTransport | None = 
             async with asyncio.timeout(READY_TIMEOUT_S):
                 for path in ("/health", "/v1/models"):
                     if not (await client.get(path)).is_success:
-                        raise GatewayError(503, "upstream_unavailable", f"upstream {path} is not OK")
+                        raise GatewayError(
+                            503, "upstream_unavailable", f"upstream {path} is not OK"
+                        )
         except (TimeoutError, httpx.TransportError):
-            raise GatewayError(503, "upstream_unavailable", "upstream is not reachable")
+            raise GatewayError(503, "upstream_unavailable", "upstream is not reachable") from None
         return {"status": "ready"}
 
     @app.get("/v1/models", dependencies=[Depends(require_auth)])
@@ -200,7 +235,9 @@ def create_app(settings: Settings, transport: httpx.AsyncBaseTransport | None = 
     async def voices(request: Request):
         return await forward(request, "GET", "/v1/audio/voices")
 
-    def prepare_text(request: Request, body: dict, names: tuple[str, ...] = ("input",)) -> tuple[list[str], str | None]:
+    def prepare_text(
+        request: Request, body: dict, names: tuple[str, ...] = ("input",)
+    ) -> tuple[list[str], str | None]:
         """Replace each of `names` present in body with its engine text, in order.
 
         Returns (warnings of "input" only, effective language). Input errors are raised for the
@@ -219,12 +256,14 @@ def create_app(settings: Settings, transport: httpx.AsyncBaseTransport | None = 
         try:
             for name in names:
                 if body.get(name) is not None:
-                    body[name], field_warnings = text_pipeline.process(body[name], vietnamese=vietnamese)
+                    body[name], field_warnings = text_pipeline.process(
+                        body[name], vietnamese=vietnamese
+                    )
                     if name == "input":
                         warnings = field_warnings
         except pipeline.TextError as exc:
             fields["text_error"] = exc.type
-            raise GatewayError(400, exc.type, str(exc))
+            raise GatewayError(400, exc.type, str(exc)) from None
         finally:
             fields["pipeline_ms"] = elapsed_ms(start)
         fields.update(engine_chars=len(body["input"]), warnings=warnings)
@@ -261,7 +300,7 @@ async def read_body(request: Request, required: tuple[str, ...]) -> dict:
     try:
         body = json.loads(await request.body())
     except ValueError:
-        raise GatewayError(400, "invalid_request", "request body must be valid JSON")
+        raise GatewayError(400, "invalid_request", "request body must be valid JSON") from None
     if not isinstance(body, dict):
         raise GatewayError(400, "invalid_request", "request body must be a JSON object")
     for key in ("model", "input", "language", "reference_text"):
@@ -271,7 +310,9 @@ async def read_body(request: Request, required: tuple[str, ...]) -> dict:
         body.pop("text_processing", None)
     options = body.get("text_processing", {})
     if not isinstance(options, dict) or not isinstance(options.get("normalize", True), bool):
-        raise GatewayError(400, "invalid_request", "'text_processing' must be an object with boolean 'normalize'")
+        raise GatewayError(
+            400, "invalid_request", "'text_processing' must be an object with boolean 'normalize'"
+        )
     return body
 
 
@@ -281,6 +322,8 @@ def check_voice_ref(body: dict) -> None:
     ref = body["voice_ref"]
     # Server-side paths would let callers read arbitrary files on the upstream host.
     if isinstance(ref, str) or (isinstance(ref, dict) and ref.get("type") == "path"):
-        raise GatewayError(400, "voice_ref_path_not_allowed", "voice_ref paths are not allowed; use type \"base64\"")
+        raise GatewayError(
+            400, "voice_ref_path_not_allowed", 'voice_ref paths are not allowed; use type "base64"'
+        )
     if not (isinstance(ref, dict) and ref.get("type") == "base64"):
-        raise GatewayError(400, "invalid_request", "voice_ref must be an object with type \"base64\"")
+        raise GatewayError(400, "invalid_request", 'voice_ref must be an object with type "base64"')

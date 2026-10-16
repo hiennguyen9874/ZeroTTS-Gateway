@@ -19,6 +19,7 @@ from omnivoice_gateway.config import Settings
 UPSTREAM_URL = "http://upstream.test"
 WAV = b"RIFF\x24\x00\x00\x00WAVEfmt fake-audio-bytes"
 
+
 class ScriptedStream(httpx.AsyncByteStream):
     """Fake upstream body that plays a script.
 
@@ -52,16 +53,23 @@ Handler = Callable[[httpx.Request], httpx.Response | Awaitable[httpx.Response]]
 
 
 class FakeUpstream:
-    """Records every request; routes are (method, path) -> handler. `down` simulates a refused connection."""
+    """Records every request; routes are (method, path) -> handler.
+
+    `down` simulates a refused connection.
+    """
 
     def __init__(self):
         self.requests: list[httpx.Request] = []
         self.down = False
         self.routes: dict[tuple[str, str], Handler] = {
             ("GET", "/health"): lambda r: httpx.Response(200, json={"status": "ok"}),
-            ("GET", "/v1/models"): lambda r: httpx.Response(200, json={"object": "list", "data": []}),
+            ("GET", "/v1/models"): lambda r: httpx.Response(
+                200, json={"object": "list", "data": []}
+            ),
             ("GET", "/v1/audio/voices"): lambda r: httpx.Response(200, json={"voices": []}),
-            ("POST", "/v1/audio/speech"): lambda r: httpx.Response(200, content=WAV, headers={"content-type": "audio/wav"}),
+            ("POST", "/v1/audio/speech"): lambda r: httpx.Response(
+                200, content=WAV, headers={"content-type": "audio/wav"}
+            ),
         }
 
     def on(self, method: str, path: str, handler: Handler) -> None:
@@ -70,7 +78,11 @@ class FakeUpstream:
     def stream(self, *steps, content_type: str = "audio/pcm") -> ScriptedStream:
         """Make the next speech request answer 200 with a scripted streaming body."""
         body = ScriptedStream(*steps)
-        self.on("POST", "/v1/audio/speech", lambda r: httpx.Response(200, headers={"content-type": content_type}, stream=body))
+        self.on(
+            "POST",
+            "/v1/audio/speech",
+            lambda r: httpx.Response(200, headers={"content-type": content_type}, stream=body),
+        )
         return body
 
     def calls(self, method: str, path: str) -> list[httpx.Request]:
@@ -85,13 +97,18 @@ class FakeUpstream:
             raise httpx.ConnectError("connection refused", request=request)
         handler = self.routes.get((request.method, request.url.path))
         if handler is None:
-            return httpx.Response(404, json={"error": {"message": "not found", "type": "not_found"}})
+            return httpx.Response(
+                404, json={"error": {"message": "not found", "type": "not_found"}}
+            )
         response = handler(request)
         response = await response if inspect.isawaitable(response) else response
         if isinstance(response.stream, ScriptedStream):
             return response
-        # httpx pre-reads responses built from bytes; a network transport hands back an unread stream.
-        return httpx.Response(response.status_code, headers=response.headers, stream=ScriptedStream(response.content))
+        # httpx pre-reads responses built from bytes; a network transport hands back an unread
+        # stream.
+        return httpx.Response(
+            response.status_code, headers=response.headers, stream=ScriptedStream(response.content)
+        )
 
 
 @pytest.fixture
@@ -123,11 +140,17 @@ def client(make_client) -> TestClient:
 
 @pytest.fixture
 def live_gateway(upstream):
-    """Run the gateway on a real uvicorn server (TestClient buffers whole bodies); returns its base URL."""
+    """Run the gateway on a real uvicorn server; returns its base URL.
+
+    TestClient buffers whole bodies, so streaming needs a real server.
+    """
     servers = []
 
     def start(**overrides) -> str:
-        app = create_app(Settings(upstream_url=UPSTREAM_URL, **overrides), transport=httpx.MockTransport(upstream.handle))
+        app = create_app(
+            Settings(upstream_url=UPSTREAM_URL, **overrides),
+            transport=httpx.MockTransport(upstream.handle),
+        )
         sock = socket.socket()
         sock.bind(("127.0.0.1", 0))
         server = uvicorn.Server(uvicorn.Config(app, lifespan="on", log_config=None))

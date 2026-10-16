@@ -69,7 +69,12 @@ def test_speech_base64_voice_ref_forwarded_verbatim(client, upstream):
 
 @pytest.mark.parametrize(
     "voice_ref",
-    ["/etc/passwd", "voices/demo_nu.wav", {"type": "path", "path": "/etc/passwd"}, {"type": "path", "data": "x"}],
+    [
+        "/etc/passwd",
+        "voices/demo_nu.wav",
+        {"type": "path", "path": "/etc/passwd"},
+        {"type": "path", "data": "x"},
+    ],
 )
 def test_speech_rejects_path_voice_ref_without_calling_upstream(client, upstream, voice_ref):
     response = client.post(SPEECH, json=speech_body(voice_ref=voice_ref))
@@ -109,7 +114,15 @@ def test_speech_invalid_request(client, upstream, content):
     ("status", "body"),
     [
         (503, {"error": {"message": "model is busy", "type": "server_busy"}}),
-        (400, {"error": {"message": "unsupported OmniVoice language", "type": "invalid_request_error"}}),
+        (
+            400,
+            {
+                "error": {
+                    "message": "unsupported OmniVoice language",
+                    "type": "invalid_request_error",
+                }
+            },
+        ),
         (404, {"error": {"message": "unknown model", "type": "not_found"}}),
     ],
 )
@@ -148,11 +161,17 @@ def test_speech_upstream_deadline(make_client, upstream):
 
 @pytest.mark.parametrize(
     "url",
-    ["/v1/models", "/v1/models?include_params=true", "/v1/audio/voices?model=g-omnivoice&x=a%20b&x=c"],
+    [
+        "/v1/models",
+        "/v1/models?include_params=true",
+        "/v1/audio/voices?model=g-omnivoice&x=a%20b&x=c",
+    ],
 )
 def test_passthrough_preserves_query_string_and_response(client, upstream, url):
     path = url.split("?")[0]
-    upstream.on("GET", path, lambda r: httpx.Response(207, json={"seen": str(r.url.query, "ascii")}))
+    upstream.on(
+        "GET", path, lambda r: httpx.Response(207, json={"seen": str(r.url.query, "ascii")})
+    )
 
     response = client.get(url)
 
@@ -194,7 +213,9 @@ def test_ready_503_when_upstream_down(client, upstream):
 
 @pytest.mark.parametrize("failing", ["/health", "/v1/models"])
 def test_ready_503_when_upstream_route_fails(client, upstream, failing):
-    upstream.on("GET", failing, lambda r: httpx.Response(500, json={"error": {"message": "x", "type": "y"}}))
+    upstream.on(
+        "GET", failing, lambda r: httpx.Response(500, json={"error": {"message": "x", "type": "y"}})
+    )
 
     assert_error(client.get("/ready"), 503, "upstream_unavailable")
 
@@ -205,7 +226,9 @@ PROTECTED = [("GET", "/v1/models"), ("GET", "/v1/audio/voices"), ("POST", SPEECH
 
 
 @pytest.mark.parametrize(("method", "path"), PROTECTED)
-@pytest.mark.parametrize("authorization", [None, "Bearer wrong", "secret", "Basic secret", "Bearer "])
+@pytest.mark.parametrize(
+    "authorization", [None, "Bearer wrong", "secret", "Basic secret", "Bearer "]
+)
 def test_auth_rejects_missing_or_wrong_token(make_client, upstream, method, path, authorization):
     client = make_client(api_key="secret")
     headers = {"authorization": authorization} if authorization else {}
@@ -220,7 +243,9 @@ def test_auth_rejects_missing_or_wrong_token(make_client, upstream, method, path
 def test_auth_accepts_correct_token(make_client, upstream, method, path):
     client = make_client(api_key="secret")
 
-    response = client.request(method, path, json=speech_body(), headers={"authorization": "Bearer secret"})
+    response = client.request(
+        method, path, json=speech_body(), headers={"authorization": "Bearer secret"}
+    )
 
     assert response.status_code == 200
 
@@ -242,7 +267,10 @@ def test_no_api_key_means_no_auth(client, method, path):
 
 def test_config_file_with_env_overrides(make_client, upstream, tmp_path):
     config = tmp_path / "gateway.toml"
-    config.write_text('upstream_url = "http://from-file.test"\ndeadline_s = 12\n[models.g-omnivoice]\nlanguage = "vi"\n')
+    config.write_text(
+        'upstream_url = "http://from-file.test"\ndeadline_s = 12\n'
+        '[models.g-omnivoice]\nlanguage = "vi"\n'
+    )
     env = {
         "OMNIVOICE_GATEWAY_CONFIG": str(config),
         "OMNIVOICE_GATEWAY_UPSTREAM_URL": "http://from-env.test:9000",
@@ -283,7 +311,14 @@ def test_logs_are_structured_and_contain_no_text(client, upstream, caplog):
     secret_input = "Nội dung bí mật của người dùng"
     secret_ref = "Transcript bí mật của giọng mẫu"
 
-    client.post(SPEECH, json=speech_body(input=secret_input, voice_ref={"type": "base64", "data": "AAAA"}, reference_text=secret_ref))
+    client.post(
+        SPEECH,
+        json=speech_body(
+            input=secret_input,
+            voice_ref={"type": "base64", "data": "AAAA"},
+            reference_text=secret_ref,
+        ),
+    )
 
     records = [r for r in caplog.records if r.name == "omnivoice_gateway"]
     assert records

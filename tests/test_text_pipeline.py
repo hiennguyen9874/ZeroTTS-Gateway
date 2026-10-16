@@ -1,4 +1,7 @@
-"""Text pipeline through the HTTP API: goldens via the dry-run route, then speech-route behaviour."""
+"""Text pipeline through the HTTP API.
+
+Goldens go through the dry-run route, then speech-route behaviour.
+"""
 
 import json
 from pathlib import Path
@@ -55,13 +58,21 @@ def test_normalize_response_shape(client):
 
     assert response.status_code == 200
     result = response.json()
-    assert result == {"engine_text": "xin chào.", "warnings": [], "language": "vi-VN", "pipeline_version": result["pipeline_version"]}
+    assert result == {
+        "engine_text": "xin chào.",
+        "warnings": [],
+        "language": "vi-VN",
+        "pipeline_version": result["pipeline_version"],
+    }
     assert isinstance(result["pipeline_version"], str) and result["pipeline_version"]
 
 
 @pytest.fixture
 def model_client(make_client):
-    models = {"g-omnivoice": ModelDefaults(language="vi"), "omnivoice": ModelDefaults(normalize=False)}
+    models = {
+        "g-omnivoice": ModelDefaults(language="vi"),
+        "omnivoice": ModelDefaults(normalize=False),
+    }
     return make_client(Settings(upstream_url=UPSTREAM_URL, models=models))
 
 
@@ -115,7 +126,12 @@ def test_normalize_requires_auth_when_key_set(make_client):
     client = make_client(api_key="secret")
 
     assert_error(client.post(NORMALIZE, json={"input": "x"}), 401, "unauthorized")
-    assert client.post(NORMALIZE, json={"input": "x"}, headers={"authorization": "Bearer secret"}).status_code == 200
+    assert (
+        client.post(
+            NORMALIZE, json={"input": "x"}, headers={"authorization": "Bearer secret"}
+        ).status_code
+        == 200
+    )
 
 
 # --- pronunciation lexicon --------------------------------------------------
@@ -140,13 +156,19 @@ def dry_run(client, text: str, **body) -> dict:
 def test_lexicon_matches_whole_words_only(lexicon_client):
     client = lexicon_client("AI,ây ai,acronym\n")
 
-    assert dry_run(client, "AI giúp MAI và AIR, còn AI-2 thì sao?")["engine_text"] == "ây ai giúp mai và a i rờ, còn ây ai hai thì sao?"
+    assert (
+        dry_run(client, "AI giúp MAI và AIR, còn AI-2 thì sao?")["engine_text"]
+        == "ây ai giúp mai và a i rờ, còn ây ai hai thì sao?"
+    )
 
 
 def test_lexicon_prefers_longest_entry(lexicon_client):
     client = lexicon_client("AI,ây ai,\nAI Studio,ây ai xờ tiu đi ô,product name\n")
 
-    assert dry_run(client, "Mở AI Studio rồi hỏi AI.")["engine_text"] == "mở ây ai xờ tiu đi ô rồi hỏi ây ai."
+    assert (
+        dry_run(client, "Mở AI Studio rồi hỏi AI.")["engine_text"]
+        == "mở ây ai xờ tiu đi ô rồi hỏi ây ai."
+    )
 
 
 def test_lexicon_is_case_sensitive(lexicon_client):
@@ -156,14 +178,19 @@ def test_lexicon_is_case_sensitive(lexicon_client):
 
 
 def test_lexicon_runs_before_normalizer_and_never_inside_tags(lexicon_client):
-    client = lexicon_client("iPhone,ai phôn,brand\nlaughter,cười,\nTP.HCM,Sài Gòn,regional preference\n")
+    client = lexicon_client(
+        "iPhone,ai phôn,brand\nlaughter,cười,\nTP.HCM,Sài Gòn,regional preference\n"
+    )
 
     result = dry_run(client, "Mua iPhone ở TP.HCM [laughter] nhé")
 
     assert result["engine_text"] == "mua ai phôn ở sài gòn [laughter] nhé."
 
 
-@pytest.mark.parametrize(("body", "expected"), [({"language": "en"}, "AI."), ({"text_processing": {"normalize": False}}, "AI.")])
+@pytest.mark.parametrize(
+    ("body", "expected"),
+    [({"language": "en"}, "AI."), ({"text_processing": {"normalize": False}}, "AI.")],
+)
 def test_lexicon_only_for_vietnamese_normalization(lexicon_client, body, expected):
     client = lexicon_client("AI,ây ai,\n")
 
@@ -188,7 +215,14 @@ def test_speech_reports_lexicon_pipeline_version(lexicon_client):
     assert response.headers["x-text-pipeline-version"] == dry_run(client, "x")["pipeline_version"]
 
 
-@pytest.mark.parametrize("rows", ["wrong,header\n", "word,replacement,note\nAI,,\n", "word,replacement,note\nAI,ây ai,\nAI,ây ai,\n"])
+@pytest.mark.parametrize(
+    "rows",
+    [
+        "wrong,header\n",
+        "word,replacement,note\nAI,,\n",
+        "word,replacement,note\nAI,ây ai,\nAI,ây ai,\n",
+    ],
+)
 def test_invalid_lexicon_fails_at_startup(tmp_path, rows):
     from omnivoice_gateway import create_app
 
@@ -245,7 +279,12 @@ def test_speech_input_errors_do_not_call_upstream(make_client, upstream, text, e
 )
 @pytest.mark.parametrize("normalize", [True, False])
 def test_speech_sends_dry_run_engine_text(client, upstream, text, normalize):
-    body = {"model": "g-omnivoice", "input": text, "language": "vi", "text_processing": {"normalize": normalize}}
+    body = {
+        "model": "g-omnivoice",
+        "input": text,
+        "language": "vi",
+        "text_processing": {"normalize": normalize},
+    }
     dry_run = client.post(NORMALIZE, json=body).json()
 
     response = client.post(SPEECH, json=body)
@@ -264,7 +303,10 @@ def test_speech_warning_header_once_each_in_detection_order(client):
 
     response = client.post(SPEECH, json={"model": "g-omnivoice", "input": text})
 
-    assert response.headers["x-text-warnings"] == "omitted_code_block,omitted_html,omitted_url,omitted_emoji"
+    assert (
+        response.headers["x-text-warnings"]
+        == "omitted_code_block,omitted_html,omitted_url,omitted_emoji"
+    )
 
 
 def test_speech_no_warning_header_without_warnings(client):
@@ -278,7 +320,9 @@ def test_speech_no_warning_header_without_warnings(client):
 def test_speech_streaming_response_has_text_headers(client, upstream):
     upstream.stream(b"\x01", 0.01, b"\x02")
 
-    response = client.post(SPEECH, json={"model": "g-omnivoice-stream", "input": "Chào 😀", "stream_format": "audio"})
+    response = client.post(
+        SPEECH, json={"model": "g-omnivoice-stream", "input": "Chào 😀", "stream_format": "audio"}
+    )
 
     assert response.content == b"\x01\x02"
     assert response.headers["x-text-warnings"] == "omitted_emoji"
@@ -288,7 +332,11 @@ def test_speech_streaming_response_has_text_headers(client, upstream):
 def test_speech_upstream_error_passes_through_without_text_headers(client, upstream):
     import httpx
 
-    upstream.on("POST", SPEECH, lambda r: httpx.Response(503, json={"error": {"message": "busy", "type": "server_busy"}}))
+    upstream.on(
+        "POST",
+        SPEECH,
+        lambda r: httpx.Response(503, json={"error": {"message": "busy", "type": "server_busy"}}),
+    )
 
     response = client.post(SPEECH, json={"model": "g-omnivoice", "input": "Chào 😀"})
 
@@ -300,7 +348,12 @@ def test_speech_upstream_error_passes_through_without_text_headers(client, upstr
 
 
 def test_speech_normalizes_reference_text(client, upstream):
-    body = {"model": "g-omnivoice", "input": "Xin chào", "language": "vi", "reference_text": "Giá 50.000đ 😀"}
+    body = {
+        "model": "g-omnivoice",
+        "input": "Xin chào",
+        "language": "vi",
+        "reference_text": "Giá 50.000đ 😀",
+    }
 
     response = client.post(SPEECH, json=body)
 
@@ -313,7 +366,13 @@ def test_speech_normalizes_reference_text(client, upstream):
 
 
 def test_speech_reference_text_follows_normalize_flag(client, upstream):
-    body = {"model": "g-omnivoice", "input": "Xin chào", "language": "vi", "reference_text": "Giá 50.000đ", "text_processing": {"normalize": False}}
+    body = {
+        "model": "g-omnivoice",
+        "input": "Xin chào",
+        "language": "vi",
+        "reference_text": "Giá 50.000đ",
+        "text_processing": {"normalize": False},
+    }
 
     client.post(SPEECH, json=body)
 
@@ -332,7 +391,9 @@ def test_speech_reference_text_follows_normalize_flag(client, upstream):
 def test_speech_reference_text_errors_match_input_errors(make_client, upstream, reference, error):
     client = make_client(max_input_chars=100)
 
-    response = client.post(SPEECH, json={"model": "g-omnivoice", "input": "Xin chào", "reference_text": reference})
+    response = client.post(
+        SPEECH, json={"model": "g-omnivoice", "input": "Xin chào", "reference_text": reference}
+    )
 
     assert_error(response, 400, error)
     assert SECRET not in response.text
@@ -340,7 +401,9 @@ def test_speech_reference_text_errors_match_input_errors(make_client, upstream, 
 
 
 def test_speech_reference_text_must_be_string(client, upstream):
-    response = client.post(SPEECH, json={"model": "g-omnivoice", "input": "Xin chào", "reference_text": ["x"]})
+    response = client.post(
+        SPEECH, json={"model": "g-omnivoice", "input": "Xin chào", "reference_text": ["x"]}
+    )
 
     assert_error(response, 400, "invalid_request")
     assert upstream.requests == []

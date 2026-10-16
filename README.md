@@ -58,4 +58,6 @@ python -m http.server -d outputs/samples 9000                # mở http://local
 
 ```bash
 uv run pytest
+uv run ruff check .
+uv run ruff format --check .
 ```
