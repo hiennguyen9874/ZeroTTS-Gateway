@@ -1,14 +1,20 @@
 #!/usr/bin/env python3
-"""Render golden cases for a listening run: gateway (A) vs audio.cpp direct (B), with metrics.
+"""Render cases for a listening run: gateway (A) vs audio.cpp direct (B), with metrics.
 
 Needs a running audio.cpp server and a gateway in front of it (see README, docs/USAGE.md):
 
   uv run python scripts/render_samples.py --out outputs/listen-001
   uv run python scripts/render_samples.py --model g-omnivoice-stream --group numbers-money
   uv run python scripts/render_samples.py --no-direct --id plain-vi --overwrite
+  uv run python scripts/render_samples.py --set listening --question 3 --out outputs/q3
   # listen: python -m http.server -d outputs/listen-001 9000
 
-Same model, voice and seed for both sides, so differences come from the text pipeline. Output:
+Case sets: "golden" (default) is the regression golden set minus error cases; "listening"
+(scripts/listening_cases.json) is the listening-only set for the open questions of issue #7.
+Same model, voice and seed for both sides, so differences come from the text pipeline. Clone cases
+("clone": voice) send that voice's WAV from voices/ as base64 with its transcript from
+voices/prompt_text as reference_text: the gateway side normalizes it, the direct side sends it
+verbatim with the gateway's engine text as input, so only reference_text differs. Output:
 
   <case>.<side>.wav   PCM s16le mono, written via a temp file then renamed
   results.csv         one row per (case, side): metrics, flags, text warnings, blank review columns
@@ -26,7 +32,9 @@ from __future__ import annotations
 
 import argparse
 import array
+import base64
 import csv
+import functools
 import html
 import io
 import json
@@ -43,16 +51,20 @@ from pathlib import Path
 import httpx
 
 ROOT = Path(__file__).resolve().parent.parent
-GOLDEN = ROOT / "tests" / "golden" / "pipeline.json"
+CASE_SETS = {
+    "golden": ROOT / "tests" / "golden" / "pipeline.json",
+    "listening": ROOT / "scripts" / "listening_cases.json",
+}
+VOICES = ROOT / "voices"
 
 SILENCE_LEVEL = 328  # ~-40 dBFS on s16
 CLIP_LEVEL = 32767
 REPORTS = ("results.csv", "manifest.json", "index.html")
 CSV_FIELDS = [
-    "case_id", "group", "side", "result", "http_status", "file", "duration_s", "ttfb_ms",
-    "total_ms", "rtf", "peak_dbfs", "rms_dbfs", "lead_silence_ms", "trail_silence_ms",
-    "clipped_samples", "flags", "text_warnings", "known_issue", "input", "engine_text",
-    "review_result", "reviewer", "notes",
+    "case_id", "group", "questions", "side", "reference_text", "result", "http_status", "file",
+    "duration_s", "ttfb_ms", "total_ms", "rtf", "peak_dbfs", "rms_dbfs", "lead_silence_ms",
+    "trail_silence_ms", "clipped_samples", "flags", "text_warnings", "known_issue",
+    "review_focus", "input", "engine_text", "review_result", "reviewer", "notes",
 ]  # fmt: skip
 
 
@@ -61,6 +73,7 @@ class Sample:
     case: dict
     side: str
     engine_text: str
+    reference_text: str = ""  # clone cases: the reference_text the model received
     result: str = "audio"  # "audio" or a failure code
     http_status: int | None = None
     file: str = ""
@@ -72,13 +85,15 @@ class Sample:
 
 def main() -> int:
     args = parse_args()
-    cases = [c for c in json.loads(GOLDEN.read_text("utf-8")) if "error" not in c]
+    cases = [c for c in json.loads(CASE_SETS[args.case_set].read_text("utf-8")) if "error" not in c]
     if args.group:
         cases = [c for c in cases if c.get("group") in args.group]
     if args.id:
         cases = [c for c in cases if c["id"] in args.id]
+    if args.question:
+        cases = [c for c in cases if set(c.get("questions", ())) & set(args.question)]
     if not cases:
-        sys.exit("no matching golden cases")
+        sys.exit(f"no matching {args.case_set} cases")
     prepare_out(args.out, args.overwrite)
 
     timeout = httpx.Timeout(args.timeout, connect=10)
@@ -103,10 +118,17 @@ def main() -> int:
         body = {
             "model": args.model,
             "input": case["input"],
-            "voice": args.voice,
             "seed": args.seed,
             "language": case.get("language", "vi"),
         }
+        if "clone" in case:
+            audio_b64, reference = clone_reference(case["clone"])
+            body |= {
+                "voice_ref": {"type": "base64", "data": audio_b64},
+                "reference_text": reference,
+            }
+        else:
+            body["voice"] = args.voice
         body |= (
             {"response_format": "pcm", "stream_format": "audio"}
             if streaming
@@ -115,14 +137,20 @@ def main() -> int:
         processing = (
             {"text_processing": {"normalize": case["normalize"]}} if "normalize" in case else {}
         )
-        engine = (
-            gateway.post("/v1/text/normalize", json={**body, **processing})
-            .raise_for_status()
-            .json()["engine_text"]
-        )
+        engine = normalize(gateway, {**body, **processing})
         for side, client in sides:
-            payload = {**body, **processing} if side == "gateway" else body
-            sample = Sample(case, side, engine)
+            reference = ""
+            if side == "gateway":
+                payload = {**body, **processing}
+                if "clone" in case:
+                    reference = normalize(gateway, {**payload, "input": body["reference_text"]})
+            elif "clone" in case:
+                # Same model input on both sides, so the only difference is reference_text.
+                payload = {**body, "input": engine}
+                reference = body["reference_text"]
+            else:
+                payload = body
+            sample = Sample(case, side, engine, reference)
             audio = synthesize(client, payload, sample, streaming, args.sample_rate)
             if audio:
                 sample.file = f"{case['id']}.{side}.wav"
@@ -134,7 +162,14 @@ def main() -> int:
     for sample in samples:
         counts[sample.result] = counts.get(sample.result, 0) + 1
     counts["flagged"] = sum(bool(s.metrics.get("flags")) for s in samples)
+    groups: dict[str, list[str]] = {}
+    questions: dict[str, list[str]] = {}
+    for case in cases:
+        groups.setdefault(case.get("group", ""), []).append(case["id"])
+        for q in case.get("questions", ()):
+            questions.setdefault(str(q), []).append(case["id"])
     manifest = {
+        "case_set": args.case_set,
         "git_commit": git_commit(),
         "pipeline_version": version,
         "model": args.model,
@@ -144,6 +179,8 @@ def main() -> int:
         "started_utc": started,
         "finished_utc": datetime.now(UTC).isoformat(),
         "cases": len(cases),
+        "groups": groups,
+        "questions": dict(sorted(questions.items())),
         "sides": [side for side, _ in sides],
         "gateway": args.gateway,
         "upstream": None if args.no_direct else args.upstream,
@@ -172,8 +209,22 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--model", default="g-omnivoice")
     ap.add_argument("--voice", default="demo_nu")
     ap.add_argument("--seed", type=int, default=42)
-    ap.add_argument("--group", action="append", help="only these golden groups (repeatable)")
-    ap.add_argument("--id", action="append", help="only these golden ids (repeatable)")
+    ap.add_argument(
+        "--set",
+        dest="case_set",
+        choices=CASE_SETS,
+        default="golden",
+        help="golden: regression goldens without error cases; listening: listening-only set",
+    )
+    ap.add_argument("--group", action="append", help="only these case groups (repeatable)")
+    ap.add_argument("--id", action="append", help="only these case ids (repeatable)")
+    ap.add_argument(
+        "--question",
+        type=int,
+        action="append",
+        choices=range(1, 6),
+        help="only cases for these issue #7 questions (repeatable)",
+    )
     ap.add_argument("--out", type=Path, default=ROOT / "outputs" / "samples")
     ap.add_argument(
         "--overwrite",
@@ -188,6 +239,21 @@ def parse_args() -> argparse.Namespace:
     )
     ap.add_argument("--timeout", type=float, default=600, help="per-request read timeout (s)")
     return ap.parse_args()
+
+
+def normalize(gateway: httpx.Client, body: dict) -> str:
+    return gateway.post("/v1/text/normalize", json=body).raise_for_status().json()["engine_text"]
+
+
+@functools.cache
+def clone_reference(voice: str) -> tuple[str, str]:
+    """Base64 WAV of voices/<voice>.wav and its transcript from voices/prompt_text (name|text)."""
+    audio = base64.b64encode((VOICES / f"{voice}.wav").read_bytes()).decode("ascii")
+    for line in (VOICES / "prompt_text").read_text("utf-8").splitlines():
+        name, _, text = line.partition("|")
+        if name.strip() == voice:
+            return audio, text.strip()
+    sys.exit(f"no transcript for voice {voice!r} in {VOICES / 'prompt_text'}")
 
 
 def prepare_out(out: Path, overwrite: bool) -> None:
@@ -328,7 +394,12 @@ def write_csv(path: Path, samples: list[Sample]) -> None:
                 {
                     "case_id": s.case["id"],
                     "group": s.case.get("group", ""),
+                    "questions": ",".join(map(str, s.case.get("questions", ()))),
                     "side": s.side,
+                    "reference_text": (
+                        "" if "clone" not in s.case
+                        else "normalized" if s.side == "gateway" else "verbatim"
+                    ),
                     "result": s.result,
                     "http_status": s.http_status or "",
                     "file": s.file,
@@ -341,6 +412,7 @@ def write_csv(path: Path, samples: list[Sample]) -> None:
                     )},
                     "text_warnings": s.warnings,
                     "known_issue": s.case.get("known_issue", ""),
+                    "review_focus": s.case.get("review_focus", ""),
                     "input": s.case["input"],
                     "engine_text": s.engine_text,
                     "review_result": "",  # pass / fail / ambiguous / not-listened
@@ -367,8 +439,12 @@ def render_html(samples: list[Sample], manifest: dict) -> str:
     sides = manifest["sides"]
 
     def cell(s: Sample) -> str:
+        reference = ""
+        if "clone" in s.case:
+            kind = "normalized" if s.side == "gateway" else "verbatim"
+            reference = f'<div class="muted">reference_text ({kind}): {e(s.reference_text)}</div>'
         if s.result != "audio":
-            return f'<td class="bad">{e(s.result)}</td>'
+            return f'<td class="bad">{e(s.result)}{reference}</td>'
         m = s.metrics
         info = (
             f"{m['duration_s']}s · ttfb {s.ttfb_ms or 0:.0f} ms · total {s.total_ms:.0f} ms"
@@ -380,7 +456,7 @@ def render_html(samples: list[Sample], manifest: dict) -> str:
         warnings = f'<div class="muted">warnings: {e(s.warnings)}</div>' if s.warnings else ""
         return (
             f'<td><audio controls preload="none" src="{e(s.file)}"></audio>'
-            f'<div class="muted">{e(info)}</div>{flags}{warnings}</td>'
+            f'<div class="muted">{e(info)}</div>{flags}{warnings}{reference}</td>'
         )
 
     by_case: dict[str, dict[str, Sample]] = {}
@@ -395,10 +471,15 @@ def render_html(samples: list[Sample], manifest: dict) -> str:
             if c.get("known_issue")
             else ""
         )
+        questions = " ".join(f"Q{q}" for q in c.get("questions", ()))
+        focus = (
+            f"<div><b>listen for:</b> {e(c['review_focus'])}</div>" if c.get("review_focus") else ""
+        )
         trs.append(
-            f"<tr><td><b>{e(c['id'])}</b><br><small>{e(c.get('group', ''))}</small></td>"
+            f"<tr><td><b>{e(c['id'])}</b><br><small>{e(c.get('group', ''))}"
+            f" {e(questions)}</small></td>"
             f"<td><pre>{e(c['input'])}</pre></td>"
-            f"<td><pre>{e(first.engine_text)}</pre><small>{e(c['why'])}</small>{issue}</td>"
+            f"<td><pre>{e(first.engine_text)}</pre><small>{e(c['why'])}</small>{focus}{issue}</td>"
             + "".join(cell(row[side]) for side in sides)
             + "</tr>"
         )
@@ -406,7 +487,16 @@ def render_html(samples: list[Sample], manifest: dict) -> str:
     head = "".join(f"<th>{names[side]}</th>" for side in sides)
     meta = " · ".join(
         f"{k}={manifest[k]}"
-        for k in ("model", "mode", "voice", "seed", "pipeline_version", "git_commit", "started_utc")
+        for k in (
+            "case_set",
+            "model",
+            "mode",
+            "voice",
+            "seed",
+            "pipeline_version",
+            "git_commit",
+            "started_utc",
+        )
     )
     return f"""<!doctype html><meta charset="utf-8"><title>OmniVoice gateway samples</title>
 <style>body{{font-family:sans-serif;margin:1em}}table{{border-collapse:collapse}}

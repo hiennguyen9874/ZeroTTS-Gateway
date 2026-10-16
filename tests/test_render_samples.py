@@ -4,6 +4,7 @@ The script runs as a subprocess against a live gateway and a live fake upstream 
 so the observable behaviour is its exit code, console output and output directory.
 """
 
+import base64
 import csv
 import io
 import json
@@ -23,6 +24,7 @@ ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = ROOT / "scripts" / "render_samples.py"
 GOLDEN = json.loads((ROOT / "tests" / "golden" / "pipeline.json").read_text("utf-8"))
 AUDIO_CASES = [case for case in GOLDEN if "error" not in case]
+LISTENING = json.loads((ROOT / "scripts" / "listening_cases.json").read_text("utf-8"))
 SPEECH = "/v1/audio/speech"
 RATE = 24000
 MODELS = {
@@ -225,3 +227,88 @@ def test_refuses_output_dir_with_data_unless_overwrite(run, upstream, tmp_path):
     assert (out / "keep.txt").read_text() == "mine"
     assert not (out / "stale.gateway.wav").exists()
     assert (out / "plain-vi.gateway.wav").exists()
+
+
+def test_listening_set_covers_the_five_questions():
+    ids = [case["id"] for case in LISTENING]
+    assert len(ids) == len(set(ids))
+    for case in LISTENING:
+        assert case["input"].strip() and case["why"].strip() and case["review_focus"].strip()
+        assert set(case["questions"]) <= {1, 2, 3, 4, 5}, case["id"]
+    groups = {case["group"] for case in LISTENING}
+    assert {"hard", "abbrev-case", "long-text", "tags", "clone"} <= groups
+    assert {q for case in LISTENING for q in case["questions"]} == {1, 2, 3, 4, 5}
+    # Long enough for at least 30 s of audio and several streaming chunks.
+    for case in LISTENING:
+        if case["group"] == "long-text":
+            assert 600 <= len(case["input"]) <= 800, case["id"]
+    transcripts = (ROOT / "voices" / "prompt_text").read_text("utf-8")
+    for case in LISTENING:
+        if "clone" in case:
+            assert (ROOT / "voices" / f"{case['clone']}.wav").exists()
+            assert f"{case['clone']}|" in transcripts
+
+
+def test_renders_listening_set_with_questions_and_clone_sides(run, upstream, tmp_path):
+    audio = pcm((0.1, 0), (0.5, 8000), (0.1, 0))
+    upstream.on("POST", SPEECH, speaker(lambda body: [audio]))
+    out = tmp_path / "out"
+
+    result = run("--set", "listening", "--seed", "3")
+
+    assert result.returncode == 0, result.stderr
+    rows = read_rows(out)
+    assert [(r["case_id"], r["side"]) for r in rows] == [
+        (case["id"], side) for case in LISTENING for side in ("gateway", "direct")
+    ]
+    by_id = {case["id"]: case for case in LISTENING}
+    for row in rows:
+        case = by_id[row["case_id"]]
+        assert row["result"] == "audio", row
+        assert row["questions"] == ",".join(map(str, case["questions"]))
+        assert row["review_focus"] == case["review_focus"]
+        expected = (
+            ("normalized" if row["side"] == "gateway" else "verbatim") if "clone" in case else ""
+        )
+        assert row["reference_text"] == expected, row["case_id"]
+
+    manifest = json.loads((out / "manifest.json").read_text("utf-8"))
+    assert manifest["case_set"] == "listening"
+    assert manifest["questions"] == {
+        str(q): [case["id"] for case in LISTENING if q in case["questions"]] for q in range(1, 6)
+    }
+    assert manifest["groups"]["clone"] == ["clone-plain", "clone-numbers"]
+
+    # Clone: same reference audio, seed and model input on both sides; only reference_text differs.
+    voice_wav = base64.b64encode((ROOT / "voices" / "demo_nu.wav").read_bytes()).decode()
+    transcript = "Xin chào các bạn, hôm nay trời Hà Nội rất đẹp."
+    sent = [json.loads(r.content) for r in upstream.calls("POST", SPEECH)]
+    clones = [body for body in sent if "voice_ref" in body]
+    assert len(clones) == 4  # two clone cases, gateway then direct
+    engine = {r["case_id"]: r["engine_text"] for r in rows}
+    for (via_gateway, direct), case_id in zip(
+        (clones[0:2], clones[2:4]), ("clone-plain", "clone-numbers"), strict=True
+    ):
+        for body in (via_gateway, direct):
+            assert body["voice_ref"] == {"type": "base64", "data": voice_wav}
+            assert "voice" not in body
+            assert (body["seed"], body["input"]) == (3, engine[case_id])
+        assert direct["reference_text"].startswith(transcript)
+        assert via_gateway["reference_text"].startswith(transcript.lower())
+    assert all(body["voice"] == "demo_nu" for body in sent if "voice_ref" not in body)
+
+    page = (out / "index.html").read_text("utf-8")
+    assert "reference_text (normalized): xin chào các bạn" in page
+    assert "reference_text (verbatim): Xin chào các bạn" in page
+    assert "Q5" in page
+
+
+def test_filters_listening_set_by_question(run, upstream, tmp_path):
+    upstream.on("POST", SPEECH, speaker(lambda body: [pcm((0.5, 1000))]))
+
+    result = run("--set", "listening", "--question", "3", "--question", "5", "--no-direct")
+
+    assert result.returncode == 0, result.stderr
+    assert [r["case_id"] for r in read_rows(tmp_path / "out")] == [
+        case["id"] for case in LISTENING if {3, 5} & set(case["questions"])
+    ]

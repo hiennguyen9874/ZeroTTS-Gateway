@@ -64,7 +64,7 @@ Ca golden nằm ở `tests/golden/pipeline.json`, chạy qua route dry-run. Mỗ
 
 ## Nghe thử mẫu
 
-Cần audio.cpp (`docs/USAGE.md`) và gateway đang chạy. Script đọc các ca golden không lỗi, gọi cả gateway (A) lẫn audio.cpp trực tiếp (B) với cùng model, voice, seed, rồi lưu WAV, chỉ số và trang so sánh:
+Cần audio.cpp (`docs/USAGE.md`) và gateway đang chạy. Script đọc các ca không lỗi (mặc định golden; xem Bộ câu nghe thử), gọi cả gateway (A) lẫn audio.cpp trực tiếp (B) với cùng model, voice, seed, rồi lưu WAV, chỉ số và trang so sánh:
 
 ```bash
 uv run python scripts/render_samples.py --out outputs/listen-001   # --model, --voice, --seed, --group, --id, --no-direct
@@ -76,16 +76,43 @@ python -m http.server -d outputs/listen-001 9000                   # mở http:/
 - Thư mục output đã có dữ liệu thì script từ chối; `--overwrite` xoá WAV và báo cáo cũ của script (giữ file khác) rồi chạy lại.
 - Console chỉ in id ca và chỉ số, không in văn bản. Exit code 1 khi có request không ra audio.
 
+### Bộ câu nghe thử
+
+Ngoài golden (mặc định, `--set golden`), `--set listening` chạy bộ câu riêng `scripts/listening_cases.json` dùng để trả lời 5 câu hỏi của #7. Bộ này chỉ để nghe; regression vẫn chỉ nằm ở golden. Lọc bằng `--group`, `--id` hoặc `--question` (1–5, lặp được).
+
+| Nhóm | Câu hỏi | Nội dung |
+| --- | --- | --- |
+| `hard` | – (in hoa: 2) | Ca khó lọc từ vietvoice-tts: `Có không?/./!`, `Thật à?/./!`, NFD, in hoa, không dấu, khoảng trắng lạ, câu rất ngắn, thiếu dấu kết thúc |
+| `abbrev-case` | 1, 2 | `AI`/`API` viết hoa, `a i`, dạng từ điển phát âm `ây ai` (viết sẵn, vì từ điển nạp lúc khởi động nên không bật/tắt theo request được), viết tắt tiếng Việt, tên riêng viết hoa |
+| `long-text` | 3 | Đoạn ~700 ký tự (≥30 s audio) có ngày, số, phần trăm, tiền, giờ, viết tắt |
+| `tags` | 4 | Non-verbal tag ở đầu, giữa, cuối, kề dấu câu, một câu đối chứng không tag, phiên âm CMU |
+| `clone` | 5 | Clone từ `voices/demo_nu.wav` |
+
+```bash
+# Câu hỏi 1, 2, 4, 5 và ca khó, model offline
+uv run python scripts/render_samples.py --set listening --out outputs/listen-q-offline
+# Câu hỏi 3 ở cả hai model: offline và streaming
+uv run python scripts/render_samples.py --set listening --question 3 --out outputs/listen-q3-offline
+uv run python scripts/render_samples.py --set listening --question 3 --model g-omnivoice-stream --out outputs/listen-q3-stream
+```
+
+Ca clone (`"clone": "<voice>"`) gửi `voices/<voice>.wav` dạng base64 trong `voice_ref` (không gửi `voice`), `reference_text` lấy từ dòng `<voice>|…` của `voices/prompt_text`. Phía A (gateway) gửi `reference_text` nguyên văn để gateway chuẩn hoá; phía B (direct) gửi `reference_text` **nguyên văn** và lấy engine text của gateway làm `input`, nên hai phía cùng input, seed, model và chỉ khác `reference_text`. Cột `reference_text` trong `results.csv` ghi `normalized`/`verbatim`; trang HTML hiện văn bản tham chiếu của từng phía.
+
+Thêm ca: thêm một dòng vào `scripts/listening_cases.json` với `id` ổn định (không đổi, không dùng lại), `group`, `questions` (danh sách 1–5, có thể rỗng), `input`, `why` (ca này để làm gì), `review_focus` (cần nghe điều gì); tuỳ chọn `language`, `normalize`, `clone`. Chỉ dùng văn bản tự viết, không dùng dữ liệu thật. Muốn so sánh hai biến thể thì thêm hai ca và nhắc id của nhau trong `review_focus`. Chạy `uv run pytest tests/test_render_samples.py` để kiểm tra bộ câu.
+
+### Output
+
 Output trong `--out` (mặc định `outputs/samples`):
 
 - `<id>.gateway.wav`, `<id>.direct.wav`: PCM s16le mono.
 - `index.html`: input text, engine text, player A/B, chỉ số và cờ cạnh từng player.
-- `manifest.json`: `git_commit` (thêm `-dirty` nếu có thay đổi chưa commit), `pipeline_version`, `model`, `mode`, `voice`, `seed`, `started_utc`/`finished_utc`, `cases`, `counts` theo kết quả.
+- `manifest.json`: `case_set` (`golden`/`listening`), `git_commit` (thêm `-dirty` nếu có thay đổi chưa commit), `pipeline_version`, `model`, `mode`, `voice`, `seed`, `started_utc`/`finished_utc`, `cases`, `groups` và `questions` (nhóm / câu hỏi → danh sách id ca), `counts` theo kết quả.
 - `results.csv`: mỗi hàng là một cặp (ca, phía `gateway`/`direct`):
+  - `group`, `questions` (câu hỏi của #7, ví dụ `1,2`; lọc cột này để nghe theo câu hỏi), `reference_text` (ca clone: `normalized`/`verbatim`).
   - `result`: `audio` hoặc mã lỗi (`stream_aborted`, `type` lỗi của upstream/gateway, `transport_*`, `incomplete_pcm`, `bad_wav`); `http_status`, `file`.
   - Chỉ số: `duration_s`, `ttfb_ms`, `total_ms`, `rtf` (= total / duration), `peak_dbfs`, `rms_dbfs`, `lead_silence_ms`, `trail_silence_ms` (ngưỡng ~-40 dBFS), `clipped_samples`.
   - `flags`: gợi ý chỗ cần nghe kỹ, không phải đánh giá chất lượng: `silent`, `very_short` (< 0,3 s), `clipping`, `long_lead_silence` (> 1 s), `long_trail_silence` (> 1,5 s).
-  - `text_warnings` (`X-Text-Warnings` của gateway; phía direct luôn trống), `known_issue`, `input`, `engine_text`.
+  - `text_warnings` (`X-Text-Warnings` của gateway; phía direct luôn trống), `known_issue`, `review_focus`, `input`, `engine_text`.
   - Người nghe điền: `review_result` (`pass` / `fail` / `ambiguous` / `not-listened`), `reviewer`, `notes`.
 
 ## Test
