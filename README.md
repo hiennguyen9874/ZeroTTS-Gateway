@@ -64,12 +64,29 @@ Ca golden nằm ở `tests/golden/pipeline.json`, chạy qua route dry-run. Mỗ
 
 ## Nghe thử mẫu
 
-Cần audio.cpp (`docs/USAGE.md`) và gateway đang chạy. Script đọc các ca golden không lỗi, gọi cả gateway (A) lẫn audio.cpp trực tiếp (B) với cùng model, voice, seed, rồi lưu WAV và trang `index.html` để nghe so sánh:
+Cần audio.cpp (`docs/USAGE.md`) và gateway đang chạy. Script đọc các ca golden không lỗi, gọi cả gateway (A) lẫn audio.cpp trực tiếp (B) với cùng model, voice, seed, rồi lưu WAV, chỉ số và trang so sánh:
 
 ```bash
-uv run python scripts/render_samples.py                      # --model, --voice, --seed, --group, --id, --no-direct
-python -m http.server -d outputs/samples 9000                # mở http://localhost:9000
+uv run python scripts/render_samples.py --out outputs/listen-001   # --model, --voice, --seed, --group, --id, --no-direct
+python -m http.server -d outputs/listen-001 9000                   # mở http://localhost:9000
 ```
+
+- Model streaming (`mode: streaming` trong `/v1/models`) được gọi bằng `stream_format=audio` + `response_format=pcm` để đo TTFB thật; script tự đóng gói WAV (`--sample-rate`, mặc định 24000). Model offline nhận `wav`.
+- Mỗi request gửi đúng một lần, không retry. Stream đứt sau khi đã nhận audio thì kết quả là `stream_aborted` và không lưu file. WAV ghi qua file `.part` rồi rename.
+- Thư mục output đã có dữ liệu thì script từ chối; `--overwrite` xoá WAV và báo cáo cũ của script (giữ file khác) rồi chạy lại.
+- Console chỉ in id ca và chỉ số, không in văn bản. Exit code 1 khi có request không ra audio.
+
+Output trong `--out` (mặc định `outputs/samples`):
+
+- `<id>.gateway.wav`, `<id>.direct.wav`: PCM s16le mono.
+- `index.html`: input text, engine text, player A/B, chỉ số và cờ cạnh từng player.
+- `manifest.json`: `git_commit` (thêm `-dirty` nếu có thay đổi chưa commit), `pipeline_version`, `model`, `mode`, `voice`, `seed`, `started_utc`/`finished_utc`, `cases`, `counts` theo kết quả.
+- `results.csv`: mỗi hàng là một cặp (ca, phía `gateway`/`direct`):
+  - `result`: `audio` hoặc mã lỗi (`stream_aborted`, `type` lỗi của upstream/gateway, `transport_*`, `incomplete_pcm`, `bad_wav`); `http_status`, `file`.
+  - Chỉ số: `duration_s`, `ttfb_ms`, `total_ms`, `rtf` (= total / duration), `peak_dbfs`, `rms_dbfs`, `lead_silence_ms`, `trail_silence_ms` (ngưỡng ~-40 dBFS), `clipped_samples`.
+  - `flags`: gợi ý chỗ cần nghe kỹ, không phải đánh giá chất lượng: `silent`, `very_short` (< 0,3 s), `clipping`, `long_lead_silence` (> 1 s), `long_trail_silence` (> 1,5 s).
+  - `text_warnings` (`X-Text-Warnings` của gateway; phía direct luôn trống), `known_issue`, `input`, `engine_text`.
+  - Người nghe điền: `review_result` (`pass` / `fail` / `ambiguous` / `not-listened`), `reviewer`, `notes`.
 
 ## Test
 

@@ -148,27 +148,20 @@ def client(make_client) -> TestClient:
 
 
 @pytest.fixture
-def live_gateway(upstream):
-    """Run the gateway on a real uvicorn server; returns its base URL.
-
-    TestClient buffers whole bodies, so streaming needs a real server.
-    """
+def serve():
+    """Run an ASGI app on a real uvicorn server in a thread; returns its base URL."""
     servers = []
 
-    def start(**overrides) -> str:
-        app = create_app(
-            Settings(upstream_url=UPSTREAM_URL, **overrides),
-            transport=httpx.MockTransport(upstream.handle),
-        )
+    def start(app, lifespan: str = "on") -> str:
         sock = socket.socket()
         sock.bind(("127.0.0.1", 0))
-        server = uvicorn.Server(uvicorn.Config(app, lifespan="on", log_config=None))
+        server = uvicorn.Server(uvicorn.Config(app, lifespan=lifespan, log_config=None))
         thread = threading.Thread(target=server.run, kwargs={"sockets": [sock]}, daemon=True)
         thread.start()
         servers.append((server, thread))
         deadline = time.monotonic() + 5
         while not server.started:
-            assert time.monotonic() < deadline, "gateway did not start"
+            assert time.monotonic() < deadline, "server did not start"
             time.sleep(0.01)
         return f"http://127.0.0.1:{sock.getsockname()[1]}"
 
@@ -176,3 +169,49 @@ def live_gateway(upstream):
     for server, thread in servers:
         server.should_exit = True
         thread.join(5)
+
+
+@pytest.fixture
+def live_gateway(upstream, serve):
+    """Run the gateway on a real uvicorn server; returns its base URL.
+
+    TestClient buffers whole bodies, so streaming needs a real server.
+    """
+
+    def start(**overrides) -> str:
+        app = create_app(
+            Settings(upstream_url=UPSTREAM_URL, **overrides),
+            transport=httpx.MockTransport(upstream.handle),
+        )
+        return serve(app)
+
+    return start
+
+
+@pytest.fixture
+def live_upstream(upstream, serve) -> str:
+    """Serve the fake upstream itself over real HTTP, for clients that call audio.cpp directly.
+
+    A body step that raises drops the connection mid-stream, as a crashing upstream does.
+    """
+
+    async def app(scope, receive, send):
+        body = b""
+        while True:
+            message = await receive()
+            body += message.get("body", b"")
+            if not message.get("more_body"):
+                break
+        request = httpx.Request(
+            scope["method"], UPSTREAM_URL + scope["path"], headers=scope["headers"], content=body
+        )
+        response = await upstream.handle(request)
+        headers = [(k, v) for k, v in response.headers.raw if k.lower() != b"content-length"]
+        await send(
+            {"type": "http.response.start", "status": response.status_code, "headers": headers}
+        )
+        async for chunk in response.aiter_raw():
+            await send({"type": "http.response.body", "body": chunk, "more_body": True})
+        await send({"type": "http.response.body", "body": b""})
+
+    return serve(app, lifespan="off")
