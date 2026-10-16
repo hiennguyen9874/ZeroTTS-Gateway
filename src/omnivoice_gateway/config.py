@@ -16,6 +16,17 @@ ENV_HOST = "OMNIVOICE_GATEWAY_HOST"
 class ModelDefaults:
     language: str | None = None
     normalize: bool = True
+    # Operator option, off by default (ADR 0004): `speed` sent upstream when the caller sends no
+    # `speed` and the engine text has at most short_text_max_syllables syllables. audio.cpp gives
+    # short text too little time, so some voices drop its first phrase (issue #18).
+    short_text_speed: float | None = None
+    short_text_max_syllables: int = 12
+
+    def __post_init__(self):
+        if self.short_text_speed is not None and not self.short_text_speed > 0:
+            raise ValueError("short_text_speed must be a positive number")
+        if self.short_text_max_syllables < 1:
+            raise ValueError("short_text_max_syllables must be at least 1")
 
 
 @dataclass(frozen=True)

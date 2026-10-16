@@ -15,11 +15,18 @@ max_input_chars = 5000
 lexicon_path = "lexicon.csv"
 
 # Per-model defaults; model ids not listed here are still forwarded.
+#
+# short_text_speed (off unless set, ADR 0004): `speed` the gateway sends when the caller sends
+# neither `speed` nor `options.duration_sec` and the engine text has at most
+# short_text_max_syllables (default 12) syllables. audio.cpp gives short text too little time and
+# some voices then drop its first phrase; 0.7 brought the short cases of issue #18 to full recall.
 [models.g-omnivoice]
 language = "vi"
+short_text_speed = 0.7
 
 [models.g-omnivoice-stream]
 language = "vi"
+short_text_speed = 0.7
 
 [models.omnivoice-vietnamese]
 language = "vi"

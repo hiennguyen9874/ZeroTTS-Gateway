@@ -6,7 +6,7 @@ import time
 import httpx
 import pytest
 
-from omnivoice_gateway.config import load_settings
+from omnivoice_gateway.config import ModelDefaults, load_settings
 
 from .conftest import WAV
 
@@ -309,6 +309,119 @@ def test_auth_not_required_for_health_and_ready(make_client):
 @pytest.mark.parametrize(("method", "path"), PROTECTED)
 def test_no_api_key_means_no_auth(client, method, path):
     assert client.request(method, path, json=speech_body()).status_code == 200
+
+
+# --- short_text_speed (operator option, issue #18, ADR 0004) -----------------
+#
+# audio.cpp gives short text too little time; the model pauses before the first phrase and some
+# voices (Doan_Trang, Quang_Son) drop it. An operator can make the gateway send a slower `speed`
+# for short engine text when the caller did not choose one.
+
+SLOW = {"g-omnivoice": ModelDefaults(language="vi", short_text_speed=0.7)}
+
+
+def test_short_text_speed_off_by_default(client, upstream):
+    client.post(SPEECH, json=speech_body(input="Giới thiệu, Nội dung chính."))
+
+    assert "speed" not in upstream.last_json()
+
+
+def test_short_text_speed_sent_for_short_engine_text(make_client, upstream):
+    client = make_client(models=SLOW)
+
+    client.post(SPEECH, json=speech_body(input="# Giới thiệu\nNội dung chính."))
+
+    assert upstream.last_json()["speed"] == 0.7
+
+
+def test_short_text_speed_only_for_configured_model(make_client, upstream):
+    client = make_client(models=SLOW)
+
+    client.post(SPEECH, json=speech_body(model="omnivoice", input="Xin chào."))
+
+    assert "speed" not in upstream.last_json()
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        {"speed": 1.0},
+        {"speed": 1.2},
+        {"options": {"duration_sec": 3}},
+        {"options": {"duration": 3}},
+    ],
+)
+def test_short_text_speed_never_overrides_caller_parameters(make_client, upstream, extra):
+    client = make_client(models=SLOW)
+    body = speech_body(input="Xin chào.", **extra)
+
+    client.post(SPEECH, json=body)
+
+    sent = upstream.last_json()
+    assert sent.get("speed") == extra.get("speed")
+    assert sent.get("options") == extra.get("options")
+
+
+def test_short_text_speed_threshold_counts_engine_text_syllables(make_client, upstream):
+    models = {
+        "g-omnivoice": ModelDefaults(
+            language="vi", short_text_speed=0.7, short_text_max_syllables=4
+        )
+    }
+    client = make_client(models=models)
+
+    # Four syllables, plus tags that are not read as words.
+    client.post(SPEECH, json=speech_body(input="[laughter] Xin chào các bạn. [sigh]"))
+    assert upstream.last_json()["speed"] == 0.7
+
+    # "Có 41 người." is three words but reads as five syllables once normalized.
+    client.post(SPEECH, json=speech_body(input="Có 41 người."))
+    assert "speed" not in upstream.last_json()
+
+
+def test_short_text_speed_not_sent_for_long_text(make_client, upstream):
+    client = make_client(models=SLOW)
+    text = "Xin chào, hôm nay chúng ta sẽ cùng nhau tìm hiểu cách cài đặt phần mềm trên máy tính."
+
+    client.post(SPEECH, json=speech_body(input=text))
+
+    assert "speed" not in upstream.last_json()
+
+
+def test_short_text_speed_from_config_file(make_client, upstream, tmp_path):
+    config = tmp_path / "gateway.toml"
+    config.write_text(
+        '[models.g-omnivoice]\nlanguage = "vi"\n'
+        "short_text_speed = 0.75\nshort_text_max_syllables = 3\n"
+    )
+    client = make_client(load_settings(config, env={}))
+
+    client.post(SPEECH, json=speech_body(input="Xin chào."))
+    assert upstream.last_json()["speed"] == 0.75
+    client.post(SPEECH, json=speech_body(input="Xin chào các bạn."))
+    assert "speed" not in upstream.last_json()
+
+
+@pytest.mark.parametrize(
+    "line", ["short_text_speed = 0", "short_text_speed = -1", "short_text_max_syllables = 0"]
+)
+def test_short_text_speed_invalid_config_rejected(tmp_path, line):
+    config = tmp_path / "gateway.toml"
+    config.write_text(f"[models.g-omnivoice]\n{line}\n")
+
+    with pytest.raises(ValueError):
+        load_settings(config, env={})
+
+
+def test_short_text_speed_is_logged_without_text(make_client, upstream, caplog):
+    caplog.set_level(logging.INFO, logger="omnivoice_gateway")
+    client = make_client(models=SLOW)
+
+    client.post(SPEECH, json=speech_body(input="Bí mật."))
+
+    fields = [r for r in caplog.records if r.name == "omnivoice_gateway"][-1].fields
+    assert fields["short_text_speed"] == 0.7
+    assert "Bí mật" not in caplog.text + json.dumps(fields, ensure_ascii=False)
 
 
 # --- config ------------------------------------------------------------------

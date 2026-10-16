@@ -285,6 +285,25 @@ def create_app(settings: Settings, transport: httpx.AsyncBaseTransport | None = 
         fields.update(engine_chars=len(body["input"]), warnings=warnings)
         return warnings, language
 
+    def apply_short_text_speed(request: Request, body: dict) -> None:
+        """Operator option (ADR 0004): slow short engine text down so it is not cut short.
+
+        audio.cpp sizes the audio from character weight, with no time for the pause the model puts
+        before the first phrase and at each comma; on short text some voices then drop the first
+        phrase (issue #18). Only when the caller set neither `speed` nor `options.duration_sec`,
+        so caller generation parameters still pass through untouched.
+        """
+        defaults = settings.models.get(body.get("model")) or ModelDefaults()
+        if defaults.short_text_speed is None or "speed" in body:
+            return
+        options = body.get("options")
+        if isinstance(options, dict) and ("duration_sec" in options or "duration" in options):
+            return
+        if pipeline.count_syllables(body["input"]) > defaults.short_text_max_syllables:
+            return
+        body["speed"] = defaults.short_text_speed
+        request.state.log["short_text_speed"] = defaults.short_text_speed
+
     @app.post("/v1/text/normalize", dependencies=[Depends(require_auth)])
     async def normalize(request: Request):
         body = await read_body(request, required=("input",))
@@ -304,6 +323,7 @@ def create_app(settings: Settings, transport: httpx.AsyncBaseTransport | None = 
         # are not reported because they describe the reference audio, not the caller's input.
         warnings, _ = prepare_text(request, body, ("input", "reference_text"))
         body.pop("text_processing", None)
+        apply_short_text_speed(request, body)
         headers = {"X-Text-Pipeline-Version": text_pipeline.version}
         if warnings:
             headers["X-Text-Warnings"] = ",".join(warnings)

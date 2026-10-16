@@ -228,6 +228,11 @@ def _clean(text: str) -> tuple[str, list[str]]:
     return text, warnings
 
 
+def count_syllables(text: str) -> int:
+    """Words with a letter or digit, non-verbal tags left out; one per syllable in Vietnamese."""
+    return sum(1 for word in _NONVERBAL.sub(" ", text).split() if any(ch.isalnum() for ch in word))
+
+
 def _end_line(line: str, *, last: bool) -> str:
     short = not last and (
         sum(1 for word in line.split() if any(ch.isalnum() for ch in word)) <= SHORT_LINE_SYLLABLES

@@ -6,7 +6,7 @@ A thin **gateway** in front of audio.cpp (the **upstream**) running OmniVoice. I
 
 - Spec: issue #1 (`gh issue view 1 --json title,body,comments,labels,state`). Source of truth for the API contract, pipeline step order, error codes, and out-of-scope list. Read it before changing behaviour.
 - Slices are sub-issues #2–#7 (skeleton, streaming, generic pipeline, Vietnamese normalization, golden set, listening run). Check `gh issue view <n>` for the slice you are working on.
-- Decisions already made: `docs/adr/0001-upstream-owns-chunking.md` (one upstream request per caller request; keep sentence punctuation), `docs/adr/0002-sea-g2p-normalizer.md` (sea-g2p `Normalizer`, `punc_norm=False`, and what the gateway must patch around it).
+- Decisions already made: `docs/adr/0001-upstream-owns-chunking.md` (one upstream request per caller request; keep sentence punctuation), `docs/adr/0002-sea-g2p-normalizer.md` (sea-g2p `Normalizer`, `punc_norm=False`, and what the gateway must patch around it), `docs/adr/0004-short-text-speed.md` (operator option `short_text_speed`: slower `speed` for short engine text so the upstream does not drop the first phrase).
 
 ## Conventions
 
