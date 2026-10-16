@@ -42,16 +42,12 @@ All under `references/` unless a URL.
 - `OmniVoice-hf`: base checkpoint `k2-fsa/OmniVoice` (Qwen3-0.6B backbone + audio tokenizer). Source for the audio.cpp GGUF in `models/audio.cpp-gguf/`.
 - `g-omnivoice-hf`: `g-group-ai-lab/g-omnivoice`, Vietnamese finetune with lowest WER at base-level speaker similarity; its card says to normalize text before synthesis. Served as `g-omnivoice` / `g-omnivoice-stream`.
 - `omnivoice-vietnamese-hf`: `splendor1811/omnivoice-vietnamese`, Vietnamese finetune on 1,000 h of dolly-vn data; no bundled audio tokenizer (reuses the base one). Served as `omnivoice-vietnamese`.
-- `OmniVoice-GGUF-hf` (Serveurperso, for `omnivoice.cpp`) and `omnivoice-GGUF-hf` (cstr, for `CrispASR`): third-party GGUFs in other runtimes' layouts that audio.cpp cannot load. audio.cpp GGUFs live in `models/`.
-- `omnivoice.cpp`: alternative C++/GGML OmniVoice port with its own OpenAI-style `tts-server`; prior art for punctuation-aware chunking and cross-fade.
-- `CrispASR`: whisper.cpp fork bundling many ASR/TTS backends, including OmniVoice. Comparison only.
 
 ### Vietnamese text processing
 
 - `sea-g2p`: the chosen normalizer (ADR 0002). Rust core with Python bindings and a C ABI; use `Normalizer("vi")`, not the G2P/phonemizer path. Read `python/` and `src/` when debugging a mis-reading or a known issue.
 - `vietnormalizer`: rejected normalizer, still useful as a source of English→Vietnamese loanword and acronym dictionaries (`vietnormalizer/data/*.csv`, larger 20k list in `public/`) for the pronunciation lexicon.
 - `VieNeu-TTS`: Vietnamese TTS that uses sea-g2p; reference for how sea-g2p output is fed to a model and for streaming design.
-- `vietvoice-tts`: sister project, a FastAPI gateway in front of VieNeu. Prior art for test style (pytest, golden JSON for text, fake upstream for streaming and errors), text policy (`docs/guides/text-policy.md`), and the listening run (`docs/guides/listening-run.md`). Copy the style, not the policy.
 - `llm-wiki`: personal speech knowledge base (Vietnamese). Read when designing a pipeline rule:
   - `outputs/chuong-19-cau-text-to-speech-chunker-normalizer-lexicon.md`: chunker, normalizer, lexicon design.
   - `outputs/chuong-05-ngu-am-chu-viet-va-van-ban-tieng-viet.md`: Vietnamese phonology and orthography.
