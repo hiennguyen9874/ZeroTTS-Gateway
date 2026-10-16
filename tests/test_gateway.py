@@ -322,6 +322,14 @@ def test_connect_timeout_defaults_to_3s_and_is_configurable(tmp_path):
     assert load_settings(config, env={}).connect_timeout_s == 0.5
 
 
+def test_host_env_overrides_config(tmp_path):
+    config = tmp_path / "gateway.toml"
+    config.write_text('host = "127.0.0.1"\n')
+
+    assert load_settings(config, env={}).host == "127.0.0.1"
+    assert load_settings(config, env={"OMNIVOICE_GATEWAY_HOST": "0.0.0.0"}).host == "0.0.0.0"
+
+
 def test_config_file_with_env_overrides(make_client, upstream, tmp_path):
     config = tmp_path / "gateway.toml"
     config.write_text(

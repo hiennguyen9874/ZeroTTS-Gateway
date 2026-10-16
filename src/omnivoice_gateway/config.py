@@ -9,6 +9,7 @@ from pathlib import Path
 ENV_CONFIG = "OMNIVOICE_GATEWAY_CONFIG"
 ENV_UPSTREAM_URL = "OMNIVOICE_GATEWAY_UPSTREAM_URL"
 ENV_API_KEY = "OMNIVOICE_GATEWAY_API_KEY"
+ENV_HOST = "OMNIVOICE_GATEWAY_HOST"
 
 
 @dataclass(frozen=True)
@@ -46,4 +47,6 @@ def load_settings(path: str | Path | None = None, env: Mapping[str, str] = os.en
     }
     if env.get(ENV_UPSTREAM_URL):
         data["upstream_url"] = env[ENV_UPSTREAM_URL]
+    if env.get(ENV_HOST):
+        data["host"] = env[ENV_HOST]
     return Settings(**data, api_key=env.get(ENV_API_KEY) or None, models=models)

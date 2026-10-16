@@ -1,0 +1,7 @@
+# Allowlist: only what the image needs. Config and lexicon are mounted, not baked in.
+*
+!pyproject.toml
+!uv.lock
+!README.md
+!src/
+**/__pycache__
