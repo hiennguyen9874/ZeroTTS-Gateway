@@ -17,7 +17,7 @@ from sea_g2p import Normalizer
 
 # Bump whenever a rule changes so a mis-reading can be traced to the version that produced it.
 # The pipeline version also carries a hash of the lexicon (see Pipeline.version).
-RULES_VERSION = "2"
+RULES_VERSION = "3"
 
 LEXICON_FIELDS = ("word", "replacement", "note")
 
@@ -110,6 +110,9 @@ _SENTENCE_END = re.compile(r"[.!?…][\"'”’»)\]]*$")
 _CLAUSE_END = re.compile(r"[,;:]$")
 _SPACE_BEFORE_PUNCT = re.compile(r"\s+([.,;:!?…])")
 _WS = re.compile(r"\s+")
+# A markup line (list item, heading, paragraph line) of at most this many syllables joins the next
+# with a comma instead of a period (issue #15).
+SHORT_LINE_SYLLABLES = 4
 
 
 def load_lexicon(path: str | Path) -> dict[str, str]:
@@ -215,11 +218,27 @@ def _clean(text: str) -> tuple[str, list[str]]:
     text = _STRAY.sub(" ", text)
     drop(_EMOJI, "omitted_emoji")
 
-    # A line break in markup (heading, list item, paragraph) ends a sentence; keep that boundary
-    # so the upstream's chunker and prosody do not run lines together.
-    lines = [_WS.sub(" ", line).strip() for line in text.split("\n")]
-    text = " ".join(line if _ends_clause(line) else line + "." for line in lines if line)
+    # A line break in markup (heading, list item, paragraph) is a boundary; keep it so the
+    # upstream's chunker and prosody do not run lines together. A short line without its own
+    # punctuation ends in a comma, not a period: audio.cpp sizes the audio by character weight
+    # with no time for sentence pauses, so runs of very short sentences lose a whole sentence.
+    # Its chunker also splits at commas, so chunk boundaries survive (ADR 0001).
+    lines = [line for line in (_WS.sub(" ", line).strip() for line in text.split("\n")) if line]
+    text = " ".join(_end_line(line, last=i == len(lines) - 1) for i, line in enumerate(lines))
     return text, warnings
+
+
+def _end_line(line: str, *, last: bool) -> str:
+    short = not last and (
+        sum(1 for word in line.split() if any(ch.isalnum() for ch in word)) <= SHORT_LINE_SYLLABLES
+    )
+    # A short lead-in like "Cần mang:" before a list is dropped as often as a short sentence;
+    # a comma there is heard far more reliably (issue #15).
+    if short and line.endswith(":"):
+        return line[:-1] + ","
+    if _ends_clause(line):
+        return line
+    return line + ("," if short else ".")
 
 
 def _unwrap_en(text: str) -> str:
