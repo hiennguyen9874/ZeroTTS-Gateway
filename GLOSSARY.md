@@ -29,6 +29,10 @@ _Avoid_: Spoken text, normalized text
 **Text pipeline**:
 Chuỗi bước có thứ tự biến input text thành engine text: làm sạch, áp từ điển phát âm, chuẩn hóa dạng viết sang dạng nói.
 
+**Reading rule**:
+Luật theo mẫu do gateway sở hữu, viết lại một dạng viết mà normalizer đọc sai thành dạng nói tiếng Việt; khác từ điển phát âm ở chỗ khớp theo mẫu chứ không theo từ cố định.
+_Avoid_: Normalizer patch, pre-normalization rule
+
 **Effective language**:
 Ngôn ngữ dùng để quyết định cách chuẩn bị văn bản cho một request: ngôn ngữ caller khai báo, nếu thiếu thì lấy mặc định của model.
 
