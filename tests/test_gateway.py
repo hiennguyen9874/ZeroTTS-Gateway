@@ -264,6 +264,17 @@ def test_shipped_config_loads(make_client, upstream):
     assert str(upstream.requests[-1].url).startswith("http://127.0.0.1:8080/")
 
 
+def test_config_lexicon_path_is_relative_to_config_file(make_client, tmp_path, monkeypatch):
+    (tmp_path / "gateway.toml").write_text('lexicon_path = "lex.csv"\n')
+    (tmp_path / "lex.csv").write_text("word,replacement,note\nAI,ây ai,\n", encoding="utf-8")
+    monkeypatch.chdir("/")
+    client = make_client(load_settings(tmp_path / "gateway.toml", env={}))
+
+    response = client.post("/v1/text/normalize", json={"input": "Dùng AI.", "language": "vi"})
+
+    assert response.json()["engine_text"] == "dùng ây ai."
+
+
 # --- logging -----------------------------------------------------------------
 
 

@@ -88,6 +88,11 @@ def error_response(status: int, type_: str, message: str) -> JSONResponse:
 
 
 def create_app(settings: Settings, transport: httpx.AsyncBaseTransport | None = None) -> FastAPI:
+    # Loaded once; a lexicon change takes effect on restart and changes the pipeline version.
+    text_pipeline = pipeline.Pipeline(
+        pipeline.load_lexicon(settings.lexicon_path) if settings.lexicon_path else None,
+        max_chars=settings.max_input_chars,
+    )
     client = httpx.AsyncClient(base_url=settings.upstream_url, transport=transport, timeout=None)
 
     @asynccontextmanager
@@ -195,48 +200,56 @@ def create_app(settings: Settings, transport: httpx.AsyncBaseTransport | None = 
     async def voices(request: Request):
         return await forward(request, "GET", "/v1/audio/voices")
 
-    def prepare_text(request: Request, body: dict) -> tuple[str, list[str], str | None]:
-        """Run the text pipeline on body["input"]; returns (engine text, warnings, effective language)."""
+    def prepare_text(request: Request, body: dict, names: tuple[str, ...] = ("input",)) -> tuple[list[str], str | None]:
+        """Replace each of `names` present in body with its engine text, in order.
+
+        Returns (warnings of "input" only, effective language). Input errors are raised for the
+        first failing field with the same code whichever field it is.
+        """
         defaults = settings.models.get(body.get("model")) or ModelDefaults()
         language = body.get("language")
         if language is None:
             language = defaults.language
         normalize = body.get("text_processing", {}).get("normalize", defaults.normalize)
+        vietnamese = normalize and pipeline.is_vietnamese(language)
         fields = request.state.log
         fields.update(model=body.get("model"), language=language, input_chars=len(body["input"]))
         start = time.perf_counter()
+        warnings = []
         try:
-            engine_text, warnings = pipeline.process(
-                body["input"],
-                max_chars=settings.max_input_chars,
-                vietnamese=normalize and pipeline.is_vietnamese(language),
-            )
+            for name in names:
+                if body.get(name) is not None:
+                    body[name], field_warnings = text_pipeline.process(body[name], vietnamese=vietnamese)
+                    if name == "input":
+                        warnings = field_warnings
         except pipeline.TextError as exc:
             fields["text_error"] = exc.type
             raise GatewayError(400, exc.type, str(exc))
         finally:
             fields["pipeline_ms"] = elapsed_ms(start)
-        fields.update(engine_chars=len(engine_text), warnings=warnings)
-        return engine_text, warnings, language
+        fields.update(engine_chars=len(body["input"]), warnings=warnings)
+        return warnings, language
 
     @app.post("/v1/text/normalize", dependencies=[Depends(require_auth)])
     async def normalize(request: Request):
         body = await read_body(request, required=("input",))
-        engine_text, warnings, language = prepare_text(request, body)
+        warnings, language = prepare_text(request, body)
         return {
-            "engine_text": engine_text,
+            "engine_text": body["input"],
             "warnings": warnings,
             "language": language,
-            "pipeline_version": pipeline.PIPELINE_VERSION,
+            "pipeline_version": text_pipeline.version,
         }
 
     @app.post("/v1/audio/speech", dependencies=[Depends(require_auth)])
     async def speech(request: Request):
         body = await read_body(request, required=("model", "input"))
         check_voice_ref(body)
-        body["input"], warnings, _ = prepare_text(request, body)
+        # reference_text (the voice clone transcript) goes through the same pipeline; its warnings
+        # are not reported because they describe the reference audio, not the caller's input.
+        warnings, _ = prepare_text(request, body, ("input", "reference_text"))
         body.pop("text_processing", None)
-        headers = {"X-Text-Pipeline-Version": pipeline.PIPELINE_VERSION}
+        headers = {"X-Text-Pipeline-Version": text_pipeline.version}
         if warnings:
             headers["X-Text-Warnings"] = ",".join(warnings)
         return await stream(request, "/v1/audio/speech", body, headers)
@@ -251,7 +264,7 @@ async def read_body(request: Request, required: tuple[str, ...]) -> dict:
         raise GatewayError(400, "invalid_request", "request body must be valid JSON")
     if not isinstance(body, dict):
         raise GatewayError(400, "invalid_request", "request body must be a JSON object")
-    for key in ("model", "input", "language"):
+    for key in ("model", "input", "language", "reference_text"):
         if (key in required or body.get(key) is not None) and not isinstance(body.get(key), str):
             raise GatewayError(400, "invalid_request", f"'{key}' must be a string")
     if body.get("text_processing") is None:

@@ -26,6 +26,8 @@ class Settings:
     max_input_chars: int = 5000
     host: str = "127.0.0.1"
     port: int = 8000
+    # Pronunciation lexicon CSV; a relative path in the config file is relative to that file.
+    lexicon_path: str | None = None
     models: Mapping[str, ModelDefaults] = field(default_factory=dict)
 
 
@@ -35,6 +37,8 @@ def load_settings(path: str | Path | None = None, env: Mapping[str, str] = os.en
     if path:
         with open(path, "rb") as f:
             data = tomllib.load(f)
+    if data.get("lexicon_path"):
+        data["lexicon_path"] = str(Path(path).parent / data["lexicon_path"])
     models = {model_id: ModelDefaults(**values) for model_id, values in data.pop("models", {}).items()}
     if env.get(ENV_UPSTREAM_URL):
         data["upstream_url"] = env[ENV_UPSTREAM_URL]

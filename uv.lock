@@ -403,6 +403,7 @@ dependencies = [
     { name = "httpx" },
     { name = "huggingface-hub" },
     { name = "pyarrow" },
+    { name = "sea-g2p" },
     { name = "uvicorn" },
 ]
 
@@ -418,6 +419,7 @@ requires-dist = [
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "huggingface-hub", specifier = ">=2.2.0" },
     { name = "pyarrow", specifier = ">=26.0.0" },
+    { name = "sea-g2p", specifier = "==0.10.0" },
     { name = "uvicorn", specifier = ">=0.54.0" },
 ]
 
@@ -723,6 +725,20 @@ wheels = [
 [package.optional-dependencies]
 socks = [
     { name = "pysocks" },
+]
+
+[[package]]
+name = "sea-g2p"
+version = "0.10.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/12/45/9e7075fbae0d92a2fea03d2fbe6213bbd58172fcaf03a6ad6dafd86d8f8f/sea_g2p-0.10.0.tar.gz", hash = "sha256:6efb37cc23643247b1d1aa68076fd4e4b33a62dcecefb737196d922ddcb0c0fe", size = 29831730, upload-time = "2026-09-23T02:54:37.61Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/44/20/39b58c84a7d59304ffc96494ecb9bd0fd8d2c6c10ce1fa81584329f64716/sea_g2p-0.10.0-cp310-abi3-macosx_10_12_x86_64.whl", hash = "sha256:c73a8201ef69b797178a06a4a1db1e19dc91de3555eb3ddfd05cc82f8679eb67", size = 27689961, upload-time = "2026-09-23T02:47:50.65Z" },
+    { url = "https://files.pythonhosted.org/packages/bd/cc/69b0738f8284ca8d0a68aa5662cf906003d0d874d6cd96da7b36e9f41583/sea_g2p-0.10.0-cp310-abi3-macosx_11_0_arm64.whl", hash = "sha256:4e023840f864d8fe9c6175b109c869f1a596d2d67458e3b406313ec6ce8dacbc", size = 27760671, upload-time = "2026-09-23T02:47:54.364Z" },
+    { url = "https://files.pythonhosted.org/packages/b5/f5/ec77304c6339a00b542b9dd1d12887d4a3d9017e8d1a7e76783c935dadcb/sea_g2p-0.10.0-cp310-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:4743b4bf30c7696aaa73a1a2209997960affa243909324952459c56c1dbc0b9c", size = 27974377, upload-time = "2026-09-23T02:47:57.683Z" },
+    { url = "https://files.pythonhosted.org/packages/a5/32/69112c905322361d0ea3b17383f5a14cc2eccf02ab31e0236da7cfb26d81/sea_g2p-0.10.0-cp310-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:020121dd6af8ae707e2d3b946730b501c48400e3b1135f7b16233f44610c022e", size = 27874788, upload-time = "2026-09-23T02:54:29.546Z" },
+    { url = "https://files.pythonhosted.org/packages/cb/be/5cc9a0bccb1e9e1f20c7ee2f0415b1a51725759fdab8e7018b6a2df1b7ed/sea_g2p-0.10.0-cp310-abi3-win32.whl", hash = "sha256:27a7cb16b670a48924cb16887a24c72ab4a379974fc9e7cf17a7ef8ed66c5061", size = 27438604, upload-time = "2026-09-23T02:54:31.795Z" },
+    { url = "https://files.pythonhosted.org/packages/73/57/58916050fe1218c106f89d4fa3b8f18f4ef5d264e6ec5906020f2f1dfcf2/sea_g2p-0.10.0-cp310-abi3-win_amd64.whl", hash = "sha256:118d471796ff4fafe5cdcf1f75431a63e76ec5c0e7786cb7b3ff876d6d5292ea", size = 27530792, upload-time = "2026-09-23T02:54:34.49Z" },
 ]
 
 [[package]]
