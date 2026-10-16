@@ -1,0 +1,21 @@
+# OmniVoice gateway config. Env overrides:
+#   OMNIVOICE_GATEWAY_UPSTREAM_URL  upstream base URL
+#   OMNIVOICE_GATEWAY_API_KEY       enables Bearer auth when set
+upstream_url = "http://127.0.0.1:8080"
+host = "127.0.0.1"
+port = 8000
+deadline_s = 300
+max_input_chars = 5000
+
+# Per-model defaults; model ids not listed here are still forwarded.
+[models.g-omnivoice]
+language = "vi"
+
+[models.g-omnivoice-stream]
+language = "vi"
+
+[models.omnivoice-vietnamese]
+language = "vi"
+
+[models.omnivoice]
+normalize = false
