@@ -15,6 +15,9 @@ _Avoid_: Engine, backend
 **Caller**:
 Ứng dụng gửi request tới gateway, ví dụ worker của voice agent hoặc công cụ đọc văn bản dài.
 
+**Operator**:
+Người triển khai và vận hành gateway cùng upstream; sở hữu cấu hình, từ điển phát âm và bí mật.
+
 **Input text**:
 Văn bản caller gửi trong request, ở dạng viết.
 _Avoid_: Raw text, display text
