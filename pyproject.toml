@@ -1,0 +1,21 @@
+[project]
+name = "omnivoice-gateway"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "Xuan Hien", email = "hiennguyen9874@gmail.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "gdown>=6.4.2",
+    "huggingface-hub>=2.2.0",
+    "pyarrow>=26.0.0",
+]
+
+[project.scripts]
+omnivoice-gateway = "omnivoice_gateway:main"
+
+[build-system]
+requires = ["uv_build>=0.12.9,<0.13.0"]
+build-backend = "uv_build"

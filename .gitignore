@@ -1,0 +1,18 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+/.pi/
+/models/
+/outputs/
+/.vscode/
+voices_candidates/
+/references/
+/.pi-last-response.md
