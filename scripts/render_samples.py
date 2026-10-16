@@ -207,7 +207,7 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--no-direct", action="store_true", help="only render through the gateway")
     ap.add_argument("--api-key", help="gateway Bearer key, if set")
     ap.add_argument("--model", default="g-omnivoice")
-    ap.add_argument("--voice", default="demo_nu")
+    ap.add_argument("--voice", default="vieneu_v3_Mai_Anh")
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument(
         "--set",

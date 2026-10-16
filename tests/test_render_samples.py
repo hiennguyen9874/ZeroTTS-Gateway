@@ -105,7 +105,7 @@ def test_renders_golden_set_for_listening(run, upstream, tmp_path, model, stream
     upstream.on("POST", SPEECH, speaker(lambda body: odd_chunks(audio)))
     out = tmp_path / "out"
 
-    result = run("--model", model, "--voice", "demo_nu", "--seed", "7")
+    result = run("--model", model, "--voice", "vieneu_v3_Mai_Anh", "--seed", "7")
 
     assert result.returncode == 0, result.stderr
     rows = read_rows(out)
@@ -134,7 +134,7 @@ def test_renders_golden_set_for_listening(run, upstream, tmp_path, model, stream
     sent = [json.loads(r.content) for r in upstream.calls("POST", SPEECH)]
     assert len(sent) == 2 * len(AUDIO_CASES)
     for body in sent:
-        assert (body["model"], body["voice"], body["seed"]) == (model, "demo_nu", 7)
+        assert (body["model"], body["voice"], body["seed"]) == (model, "vieneu_v3_Mai_Anh", 7)
         if streaming:
             assert (body["response_format"], body["stream_format"]) == ("pcm", "audio")
         else:
@@ -144,7 +144,11 @@ def test_renders_golden_set_for_listening(run, upstream, tmp_path, model, stream
     manifest = json.loads((out / "manifest.json").read_text("utf-8"))
     version = httpx.post(run.gateway + "/v1/text/normalize", json={"input": "x"}).json()
     assert manifest["pipeline_version"] == version["pipeline_version"]
-    assert (manifest["model"], manifest["voice"], manifest["seed"]) == (model, "demo_nu", 7)
+    assert (manifest["model"], manifest["voice"], manifest["seed"]) == (
+        model,
+        "vieneu_v3_Mai_Anh",
+        7,
+    )
     assert manifest["mode"] == ("streaming" if streaming else "offline")
     assert manifest["cases"] == len(AUDIO_CASES)
     assert re.fullmatch(r"[0-9a-f]{40}(-dirty)?", manifest["git_commit"])
@@ -280,8 +284,8 @@ def test_renders_listening_set_with_questions_and_clone_sides(run, upstream, tmp
     assert manifest["groups"]["clone"] == ["clone-plain", "clone-numbers"]
 
     # Clone: same reference audio, seed and model input on both sides; only reference_text differs.
-    voice_wav = base64.b64encode((ROOT / "voices" / "demo_nu.wav").read_bytes()).decode()
-    transcript = "Xin chào các bạn, hôm nay trời Hà Nội rất đẹp."
+    voice_wav = base64.b64encode((ROOT / "voices" / "vieneu_v3_Mai_Anh.wav").read_bytes()).decode()
+    transcript = "Chào mừng đến với"
     sent = [json.loads(r.content) for r in upstream.calls("POST", SPEECH)]
     clones = [body for body in sent if "voice_ref" in body]
     assert len(clones) == 4  # two clone cases, gateway then direct
@@ -295,11 +299,11 @@ def test_renders_listening_set_with_questions_and_clone_sides(run, upstream, tmp
             assert (body["seed"], body["input"]) == (3, engine[case_id])
         assert direct["reference_text"].startswith(transcript)
         assert via_gateway["reference_text"].startswith(transcript.lower())
-    assert all(body["voice"] == "demo_nu" for body in sent if "voice_ref" not in body)
+    assert all(body["voice"] == "vieneu_v3_Mai_Anh" for body in sent if "voice_ref" not in body)
 
     page = (out / "index.html").read_text("utf-8")
-    assert "reference_text (normalized): xin chào các bạn" in page
-    assert "reference_text (verbatim): Xin chào các bạn" in page
+    assert "reference_text (normalized): chào mừng đến với" in page
+    assert "reference_text (verbatim): Chào mừng đến với" in page
     assert "Q5" in page
 
 
@@ -312,3 +316,40 @@ def test_filters_listening_set_by_question(run, upstream, tmp_path):
     assert [r["case_id"] for r in read_rows(tmp_path / "out")] == [
         case["id"] for case in LISTENING if {3, 5} & set(case["questions"])
     ]
+
+
+def test_render_all_runs_every_voice_once_and_clone_cases_once_per_model(
+    live_gateway, live_upstream, upstream, tmp_path
+):
+    upstream.on("GET", "/v1/models", lambda r: httpx.Response(200, json=MODELS))
+    upstream.on("POST", SPEECH, speaker(lambda body: [pcm((0.5, 1000))]))
+    gateway = live_gateway()
+    out = tmp_path / "all"
+    voices = ["vieneu_v3_Mai_Anh", "vieneu_v3_Duc_Tri"]
+    command = [
+        sys.executable, str(ROOT / "scripts" / "render_all.py"), "--gateway", gateway,
+        "--upstream", live_upstream, "--set", "listening", "--model", "g-omnivoice",
+        "--no-direct", "--out", str(out), *(a for v in voices for a in ("--voice", v)),
+    ]  # fmt: skip
+
+    result = subprocess.run(command, capture_output=True, text=True, timeout=300)
+
+    assert result.returncode == 0, result.stderr
+    clone_ids = [c["id"] for c in LISTENING if "clone" in c]
+    voiced_ids = [c["id"] for c in LISTENING if "clone" not in c]
+    for voice in voices:
+        rows = read_rows(out / "listening" / "g-omnivoice" / voice)
+        assert [r["case_id"] for r in rows] == voiced_ids
+    assert [r["case_id"] for r in read_rows(out / "listening" / "g-omnivoice" / "_clone")] == (
+        clone_ids
+    )
+    sent = [json.loads(r.content) for r in upstream.calls("POST", SPEECH)]
+    assert len(sent) == 2 * len(voiced_ids) + len(clone_ids)
+    with (out / "all_results.csv").open(encoding="utf-8", newline="") as f:
+        assert len(list(csv.DictReader(f))) == len(sent)
+    assert (out / "summary.csv").exists() and (out / "index.html").exists()
+
+    # Rerun resumes: finished runs are skipped, nothing new reaches the upstream.
+    again = subprocess.run(command, capture_output=True, text=True, timeout=300)
+    assert again.returncode == 0, again.stderr
+    assert len(upstream.calls("POST", SPEECH)) == len(sent)

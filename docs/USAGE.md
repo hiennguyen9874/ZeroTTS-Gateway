@@ -149,8 +149,8 @@ Mỗi lần chạy với seed khác sẽ ra một giọng khác. Upstream khuy�
 ```bash
 $CLI --task tts --family omnivoice --backend cuda --model $M \
   --language vi --seed 42 \
-  --voice-ref voices/demo_nu.wav \
-  --reference-text "Xin chào các bạn, hôm nay trời Hà Nội rất đẹp. Tôi đang thử nghiệm hệ thống chuyển văn bản thành giọng nói tiếng Việt." \
+  --voice-ref voices/vieneu_v3_Mai_Anh.wav \
+  --reference-text "Chào mừng đến với website của chúng tôi. Đây là trang web cung cấp một giải pháp truyền văn bản thành giọng nói." \
   --text "Đây là giọng được nhân bản từ file mẫu." \
   --out outputs/clone.wav --metrics
 ```
@@ -160,7 +160,7 @@ Lưu ý:
 - **`--reference-text` là bắt buộc trong audio.cpp.** Bản Python upstream tự chạy ASR khi thiếu transcript, còn audio.cpp sẽ báo lỗi `requires reference_text when reference audio is provided`. Transcript phải khớp chính xác nội dung file mẫu.
 - File mẫu nên là WAV sạch, chỉ một người nói, dài 3–10 giây. Khoảng lặng dài và tạp âm làm giảm chất lượng clone. Mặc định `preprocess_prompt=true` sẽ cắt bớt khoảng lặng dài trong audio mẫu và thêm dấu câu vào cuối transcript.
 - Muốn clone tốt tiếng Việt thì dùng audio mẫu tiếng Việt. `assets/resources/b.wav` trong repo audio.cpp là giọng tiếng Anh.
-- `voices/demo_nu.wav` chỉ là giọng demo, được tạo bằng voice design của G-OmniVoice. Khi dùng thật, hãy thay bằng bản ghi giọng người thật.
+- Giọng trong `voices/` (`vieneu_v3_*`) được giải mã từ preset của VieNeu-TTS v3 Turbo bằng `scripts/decode_vieneu_voices.py`; transcript trong `voices/prompt_text` do ASR sinh ra nên cần nghe và sửa tay. Khi dùng thật, hãy thay bằng bản ghi giọng người thật.
 - Nếu truyền cả `--voice-ref` và `--instruct` mà hai thứ mâu thuẫn nhau, model thường theo audio mẫu. Khi chúng nhất quán, `--instruct` có thể giúp clone ổn định hơn.
 
 ### 3.3. Voice design
@@ -230,7 +230,7 @@ Ví dụ:
 
 ```bash
 $CLI --task tts --family omnivoice --backend cuda --model $M --language vi \
-  --voice-ref voices/demo_nu.wav --reference-text "<transcript>" \
+  --voice-ref voices/vieneu_v3_Mai_Anh.wav --reference-text "<transcript>" \
   --text "Nói nhanh hơn một chút." \
   --num-inference-steps 16 \
   --request-option speed=1.2 \
@@ -271,7 +271,7 @@ OmniVoice không có streaming gốc. audio.cpp làm **pseudo-streaming**: chia 
 ```bash
 $CLI --task tts --mode streaming --family omnivoice --backend cuda --model $M \
   --language vi \
-  --voice-ref voices/demo_nu.wav --reference-text "<transcript>" \
+  --voice-ref voices/vieneu_v3_Mai_Anh.wav --reference-text "<transcript>" \
   --text "Câu thứ nhất. Câu thứ hai dài hơn một chút. Câu thứ ba kết thúc." \
   --text-chunk-size 160 \
   --out outputs/stream.wav --out-dir outputs/stream_chunks
@@ -287,7 +287,7 @@ Load model một lần rồi chạy nhiều request sẽ tránh được chi ph�
 
 ```bash
 $CLI --task tts --family omnivoice --backend cuda --model $M --language vi \
-  --voice-ref voices/demo_nu.wav --reference-text "<transcript>" \
+  --voice-ref voices/vieneu_v3_Mai_Anh.wav --reference-text "<transcript>" \
   --batch-text-file lines.txt --out-dir outputs/batch --metrics
 # Thay --out-dir bằng: --batch-merge-audio concat --out outputs/merged.wav  để ghép thành 1 file
 ```
@@ -302,8 +302,8 @@ Ngoài `--batch-text-file` còn có `--batch-text-dir <dir>` (mỗi file `.txt`/
     {
       "id": "clone_01",
       "text": "Yêu cầu thứ nhất, nhân bản giọng.",
-      "voice_ref": "voices/demo_nu.wav",
-      "reference_text": "Xin chào các bạn, hôm nay trời Hà Nội rất đẹp. Tôi đang thử nghiệm hệ thống chuyển văn bản thành giọng nói tiếng Việt.",
+      "voice_ref": "voices/vieneu_v3_Mai_Anh.wav",
+      "reference_text": "Chào mừng đến với website của chúng tôi. Đây là trang web cung cấp một giải pháp truyền văn bản thành giọng nói.",
       "language": "vi",
       "seed": 1
     },
@@ -438,17 +438,17 @@ Có ba cách để client không phải gửi kèm audio mẫu trong mỗi reque
 
 ```text
 voices/
-  demo_nu.wav
+  vieneu_v3_Mai_Anh.wav
   prompt_text          # đúng tên này, không có đuôi .txt
 ```
 
 Mỗi dòng trong `prompt_text` có dạng `<tên file không đuôi>|<transcript>`:
 
 ```text
-demo_nu|Xin chào các bạn, hôm nay trời Hà Nội rất đẹp. Tôi đang thử nghiệm hệ thống chuyển văn bản thành giọng nói tiếng Việt.
+vieneu_v3_Mai_Anh|Chào mừng đến với website của chúng tôi. Đây là trang web cung cấp một giải pháp truyền văn bản thành giọng nói.
 ```
 
-Khi request gửi `"voice": "demo_nu"`, server tự đọc `voices/demo_nu.wav` và lấy transcript tương ứng. Thêm giọng mới chỉ cần thêm file WAV và một dòng vào `prompt_text`, không phải restart server.
+Khi request gửi `"voice": "vieneu_v3_Mai_Anh"`, server tự đọc `voices/vieneu_v3_Mai_Anh.wav` và lấy transcript tương ứng. Thêm giọng mới chỉ cần thêm file WAV và một dòng vào `prompt_text`, không phải restart server.
 
 **b) Preset riêng cho từng model**, khai báo trong entry của model:
 
@@ -515,7 +515,7 @@ curl -s $U -H 'Content-Type: application/json' -o design2.wav \
 
 # Clone từ thư viện giọng
 curl -s $U -H 'Content-Type: application/json' -o clone.wav \
-  -d '{"model":"g-omnivoice","input":"Đây là giọng được nhân bản.","voice":"demo_nu"}'
+  -d '{"model":"g-omnivoice","input":"Đây là giọng được nhân bản.","voice":"vieneu_v3_Mai_Anh"}'
 
 # Clone từ file trên máy chủ
 curl -s $U -H 'Content-Type: application/json' -o clone2.wav \
@@ -529,7 +529,7 @@ curl -s $U -H 'Content-Type: application/json' --data-binary @req.json -o clone3
 
 # Tham số sinh
 curl -s $U -H 'Content-Type: application/json' -o tuned.wav \
-  -d '{"model":"g-omnivoice","input":"Thử ít bước.","voice":"demo_nu","speed":1.2,
+  -d '{"model":"g-omnivoice","input":"Thử ít bước.","voice":"vieneu_v3_Mai_Anh","speed":1.2,
        "num_inference_steps":16,"guidance_scale":2.0,"options":{"class_temperature":0.0}}'
 ```
 
@@ -544,7 +544,7 @@ SSE:
 ```bash
 curl -N $U -H 'Content-Type: application/json' -H 'Accept: text/event-stream' \
   -d '{"model":"g-omnivoice-stream","input":"Câu thứ nhất. Câu thứ hai dài hơn. Câu thứ ba.",
-       "response_format":"pcm","stream_format":"sse","voice":"demo_nu",
+       "response_format":"pcm","stream_format":"sse","voice":"vieneu_v3_Mai_Anh",
        "options":{"text_chunk_size":60}}'
 ```
 
@@ -563,7 +563,7 @@ PCM thô qua chunked transfer:
 
 ```bash
 curl -sN $U -H 'Content-Type: application/json' -o out.pcm \
-  -d '{"model":"g-omnivoice-stream","input":"Thử stream PCM thô.","response_format":"pcm","stream_format":"audio","voice":"demo_nu"}'
+  -d '{"model":"g-omnivoice-stream","input":"Thử stream PCM thô.","response_format":"pcm","stream_format":"audio","voice":"vieneu_v3_Mai_Anh"}'
 ffmpeg -f s16le -ar 24000 -ac 1 -i out.pcm out.wav
 ```
 
@@ -576,7 +576,7 @@ client = OpenAI(base_url="http://127.0.0.1:8080/v1", api_key="none")
 
 # Clone từ voice_dir
 r = client.audio.speech.create(
-    model="g-omnivoice", voice="demo_nu",
+    model="g-omnivoice", voice="vieneu_v3_Mai_Anh",
     input="Xin chào từ OpenAI SDK.", response_format="wav",
 )
 r.write_to_file("clone.wav")
@@ -593,7 +593,7 @@ r.write_to_file("design.wav")
 
 # Streaming PCM thô
 with client.audio.speech.with_streaming_response.create(
-    model="g-omnivoice-stream", voice="demo_nu",
+    model="g-omnivoice-stream", voice="vieneu_v3_Mai_Anh",
     input="Thử streaming bằng SDK. Câu thứ hai.",
     response_format="pcm",
     extra_body={"stream_format": "audio"},
@@ -612,7 +612,7 @@ import base64, json, urllib.request, wave
 
 payload = {
     "model": "g-omnivoice-stream", "input": "Câu một. Câu hai. Câu ba.",
-    "voice": "demo_nu", "response_format": "pcm", "stream_format": "sse",
+    "voice": "vieneu_v3_Mai_Anh", "response_format": "pcm", "stream_format": "sse",
 }
 req = urllib.request.Request(
     "http://127.0.0.1:8080/v1/audio/speech",

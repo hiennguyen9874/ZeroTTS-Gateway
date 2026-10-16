@@ -29,7 +29,7 @@ def assert_error(response, status, type_):
 
 def test_speech_forwards_body_without_text_processing(client, upstream):
     body = speech_body(
-        voice="demo_nu",
+        voice="vieneu_v3_Mai_Anh",
         language="vi-VN",
         seed=42,
         speed=1.1,
@@ -72,7 +72,7 @@ def test_speech_base64_voice_ref_forwarded_verbatim(client, upstream):
     "voice_ref",
     [
         "/etc/passwd",
-        "voices/demo_nu.wav",
+        "voices/vieneu_v3_Mai_Anh.wav",
         {"type": "path", "path": "/etc/passwd"},
         {"type": "path", "data": "x"},
     ],

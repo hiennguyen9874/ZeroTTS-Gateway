@@ -86,7 +86,7 @@ Ngoài golden (mặc định, `--set golden`), `--set listening` chạy bộ câ
 | `abbrev-case` | 1, 2 | `AI`/`API` viết hoa, `a i`, dạng từ điển phát âm `ây ai` (viết sẵn, vì từ điển nạp lúc khởi động nên không bật/tắt theo request được), viết tắt tiếng Việt, tên riêng viết hoa |
 | `long-text` | 3 | Đoạn ~700 ký tự (≥30 s audio) có ngày, số, phần trăm, tiền, giờ, viết tắt |
 | `tags` | 4 | Non-verbal tag ở đầu, giữa, cuối, kề dấu câu, một câu đối chứng không tag, phiên âm CMU |
-| `clone` | 5 | Clone từ `voices/demo_nu.wav` |
+| `clone` | 5 | Clone từ `voices/vieneu_v3_Mai_Anh.wav` |
 
 ```bash
 # Câu hỏi 1, 2, 4, 5 và ca khó, model offline
@@ -99,6 +99,21 @@ uv run python scripts/render_samples.py --set listening --question 3 --model g-o
 Ca clone (`"clone": "<voice>"`) gửi `voices/<voice>.wav` dạng base64 trong `voice_ref` (không gửi `voice`), `reference_text` lấy từ dòng `<voice>|…` của `voices/prompt_text`. Phía A (gateway) gửi `reference_text` nguyên văn để gateway chuẩn hoá; phía B (direct) gửi `reference_text` **nguyên văn** và lấy engine text của gateway làm `input`, nên hai phía cùng input, seed, model và chỉ khác `reference_text`. Cột `reference_text` trong `results.csv` ghi `normalized`/`verbatim`; trang HTML hiện văn bản tham chiếu của từng phía.
 
 Thêm ca: thêm một dòng vào `scripts/listening_cases.json` với `id` ổn định (không đổi, không dùng lại), `group`, `questions` (danh sách 1–5, có thể rỗng), `input`, `why` (ca này để làm gì), `review_focus` (cần nghe điều gì); tuỳ chọn `language`, `normalize`, `clone`. Chỉ dùng văn bản tự viết, không dùng dữ liệu thật. Muốn so sánh hai biến thể thì thêm hai ca và nhắc id của nhau trong `review_focus`. Chạy `uv run pytest tests/test_render_samples.py` để kiểm tra bộ câu.
+
+### Chạy tất cả model × giọng
+
+`scripts/render_all.py` gọi `render_samples.py` cho mọi (bộ câu, model, giọng): mặc định cả `golden` lẫn `listening`, mọi model TTS trong `/v1/models`, mọi `voices/*.wav` có dòng trong `voices/prompt_text`.
+
+```bash
+uv run python scripts/render_all.py --dry-run                      # xem kế hoạch
+uv run python scripts/render_all.py --out outputs/render-all-001   # chạy lại cùng --out thì bỏ qua run đã xong
+uv run python scripts/render_all.py --set listening --model g-omnivoice --voice vieneu_v3_Mai_Anh --no-direct
+python -m http.server -d outputs/render-all-001 9000
+```
+
+- Mỗi run nằm ở `<set>/<model>/<voice>/`; nhóm chỉ gồm ca clone (tự mang audio tham chiếu) chạy một lần mỗi model ở `<set>/<model>/_clone/`.
+- Vòng ngoài là model để audio.cpp chỉ nạp mỗi model một lần. Run lỗi được ghi vào `runs.json` và không chặn run sau; exit code 1 khi có run lỗi.
+- Gộp kết quả: `all_results.csv` (mọi hàng `results.csv`, thêm `set`, `model`, `voice`, `run`), `summary.csv` (theo set, model, phía: số request, lỗi, cờ, trung vị rtf/ttfb/thời lượng), `index.html` (link tới trang của từng run).
 
 ### Output
 
