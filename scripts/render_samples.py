@@ -26,6 +26,14 @@ response_format=pcm so TTFB is real; offline models return WAV. A request is nev
 it is sent; a stream that breaks after audio arrived is recorded as stream_aborted and no file is
 kept. Flags are hints for the listener, not a quality verdict. The console prints case ids and
 metrics only, never text. Exit status is 1 when any request did not produce audio.
+
+ASR scoring (optional): with an OpenAI-style transcription endpoint configured (OMNIVOICE_ASR_URL,
+OMNIVOICE_ASR_MODEL, OMNIVOICE_ASR_API_KEY or the --asr-* options), every WAV is transcribed via
+POST <url>/v1/audio/transcriptions. results.csv gets asr_text and word_recall: the share of the
+gateway's engine text words heard in order in the transcript (longest common subsequence), with
+non-verbal tags, CMU spans and punctuation ignored, for both sides since the engine text is the
+intended reading. word_recall < 0.8 adds the flag words_missing. scripts/asr_server.py serves
+gipformer this way. Without ASR the run is unchanged and those columns stay blank.
 """
 
 from __future__ import annotations
@@ -40,9 +48,11 @@ import io
 import json
 import math
 import os
+import re
 import subprocess
 import sys
 import time
+import unicodedata
 import wave
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -59,12 +69,17 @@ VOICES = ROOT / "voices"
 
 SILENCE_LEVEL = 328  # ~-40 dBFS on s16
 CLIP_LEVEL = 32767
+RECALL_THRESHOLD = 0.8
+# Not words to hear: non-verbal tags ("[laughter]") and CMU pronunciation spans ("[B EY1 S]").
+UNSPOKEN = re.compile(r"\[[a-z]+(?:-[a-z]+)?\]|\[[A-Z]+[0-2]?(?: [A-Z]+[0-2]?)*\]")
+WORD = re.compile(r"[^\W_]+")
 REPORTS = ("results.csv", "manifest.json", "index.html")
 CSV_FIELDS = [
-    "case_id", "group", "questions", "side", "reference_text", "result", "http_status", "file",
-    "duration_s", "ttfb_ms", "total_ms", "rtf", "peak_dbfs", "rms_dbfs", "lead_silence_ms",
-    "trail_silence_ms", "clipped_samples", "flags", "text_warnings", "known_issue",
-    "review_focus", "input", "engine_text", "review_result", "reviewer", "notes",
+    "case_id", "group", "questions", "side", "normalize", "reference_text", "result",
+    "http_status", "file", "duration_s", "ttfb_ms", "total_ms", "rtf", "peak_dbfs", "rms_dbfs",
+    "lead_silence_ms", "trail_silence_ms", "clipped_samples", "flags", "word_recall",
+    "text_warnings", "known_issue", "review_focus", "input", "engine_text", "sent_text",
+    "asr_text", "review_result", "reviewer", "notes",
 ]  # fmt: skip
 
 
@@ -72,7 +87,9 @@ CSV_FIELDS = [
 class Sample:
     case: dict
     side: str
-    engine_text: str
+    engine_text: str  # the gateway's engine text, the intended reading for both sides
+    sent_text: str = ""  # the input text this side's request carried to the model
+    normalize: bool | None = None  # text_processing.normalize sent to the gateway, if any
     reference_text: str = ""  # clone cases: the reference_text the model received
     result: str = "audio"  # "audio" or a failure code
     http_status: int | None = None
@@ -81,6 +98,18 @@ class Sample:
     total_ms: float | None = None
     warnings: str = ""
     metrics: dict = field(default_factory=dict)
+    asr_text: str | None = None  # None: not transcribed
+    asr_error: str = ""
+    word_recall: float | None = None
+
+    @property
+    def flags(self) -> str:
+        flags = [f for f in self.metrics.get("flags", "").split(",") if f]
+        if self.asr_error:
+            flags.append("asr_failed")
+        elif self.word_recall is not None and self.word_recall < RECALL_THRESHOLD:
+            flags.append("words_missing")
+        return ",".join(flags)
 
 
 def main() -> int:
@@ -100,6 +129,10 @@ def main() -> int:
     headers = {"authorization": f"Bearer {args.api_key}"} if args.api_key else {}
     gateway = httpx.Client(base_url=args.gateway, headers=headers, timeout=timeout)
     upstream = None if args.no_direct else httpx.Client(base_url=args.upstream, timeout=timeout)
+    asr = None
+    if args.asr_url:
+        asr_headers = {"authorization": f"Bearer {args.asr_api_key}"} if args.asr_api_key else {}
+        asr = httpx.Client(base_url=args.asr_url, headers=asr_headers, timeout=timeout)
     models = gateway.get("/v1/models").raise_for_status().json()["data"]
     mode = next((m.get("mode") for m in models if m["id"] == args.model), None)
     if mode is None:
@@ -134,8 +167,9 @@ def main() -> int:
             if streaming
             else {"response_format": "wav"}
         )
+        normalize_flag = None if args.normalize_on else case.get("normalize")
         processing = (
-            {"text_processing": {"normalize": case["normalize"]}} if "normalize" in case else {}
+            {"text_processing": {"normalize": normalize_flag}} if normalize_flag is not None else {}
         )
         engine = normalize(gateway, {**body, **processing})
         for side, client in sides:
@@ -150,18 +184,25 @@ def main() -> int:
                 reference = body["reference_text"]
             else:
                 payload = body
-            sample = Sample(case, side, engine, reference)
+            # The gateway side's model input is the engine text; the direct side's is its input.
+            sent = engine if side == "gateway" else payload["input"]
+            sample = Sample(case, side, engine, sent, normalize_flag, reference)
             audio = synthesize(client, payload, sample, streaming, args.sample_rate)
             if audio:
                 sample.file = f"{case['id']}.{side}.wav"
                 write_wav(args.out / sample.file, *audio)
+                if asr:
+                    transcribe(asr, args.asr_model, args.out / sample.file, body, sample)
             samples.append(sample)
             print(f"[{i}/{len(cases)}] {case['id']} {side} {summary(sample)}", flush=True)
 
     counts = {"requests": len(samples)}
     for sample in samples:
         counts[sample.result] = counts.get(sample.result, 0) + 1
-    counts["flagged"] = sum(bool(s.metrics.get("flags")) for s in samples)
+    counts["flagged"] = sum(bool(s.flags) for s in samples)
+    if asr:
+        counts["words_missing"] = sum("words_missing" in s.flags for s in samples)
+        counts["asr_failed"] = sum(bool(s.asr_error) for s in samples)
     groups: dict[str, list[str]] = {}
     questions: dict[str, list[str]] = {}
     for case in cases:
@@ -176,6 +217,8 @@ def main() -> int:
         "mode": mode,
         "voice": args.voice,
         "seed": args.seed,
+        "normalize_on": args.normalize_on,
+        "asr": {"url": args.asr_url, "model": args.asr_model} if asr else None,
         "started_utc": started,
         "finished_utc": datetime.now(UTC).isoformat(),
         "cases": len(cases),
@@ -238,6 +281,27 @@ def parse_args() -> argparse.Namespace:
         help="rate of streamed PCM, which carries no header (OmniVoice: 24000)",
     )
     ap.add_argument("--timeout", type=float, default=600, help="per-request read timeout (s)")
+    ap.add_argument(
+        "--normalize-on",
+        action="store_true",
+        help='ignore "normalize": false in cases, so they are rendered as in production',
+    )
+    ap.add_argument(
+        "--asr-url",
+        default=os.environ.get("OMNIVOICE_ASR_URL") or None,
+        help="OpenAI-style transcription server for ASR scoring (env OMNIVOICE_ASR_URL;"
+        " unset: no ASR)",
+    )
+    ap.add_argument(
+        "--asr-model",
+        default=os.environ.get("OMNIVOICE_ASR_MODEL") or "gipformer",
+        help="transcription model (env OMNIVOICE_ASR_MODEL; default gipformer)",
+    )
+    ap.add_argument(
+        "--asr-api-key",
+        default=os.environ.get("OMNIVOICE_ASR_API_KEY") or None,
+        help="Bearer key for the ASR server (env OMNIVOICE_ASR_API_KEY)",
+    )
     return ap.parse_args()
 
 
@@ -310,6 +374,50 @@ def synthesize(
     return pcm, rate
 
 
+def transcribe(asr: httpx.Client, model: str, path: Path, body: dict, sample: Sample) -> None:
+    """One transcription request, no retry; fills asr_text and word_recall, or asr_error."""
+    data = {"model": model, "response_format": "json"}
+    if isinstance(body.get("language"), str):
+        data["language"] = body["language"].split("-")[0]
+    try:
+        response = asr.post(
+            "/v1/audio/transcriptions",
+            data=data,
+            files={"file": (path.name, path.read_bytes(), "audio/wav")},
+        )
+    except httpx.HTTPError as exc:
+        sample.asr_error = f"transport_{type(exc).__name__}"
+        return
+    if response.status_code != 200:
+        sample.asr_error = error_type(response)
+        return
+    try:
+        sample.asr_text = str(response.json()["text"]).strip()
+    except (ValueError, KeyError, TypeError):
+        sample.asr_error = "bad_asr_response"
+        return
+    sample.word_recall = word_recall(sample.engine_text, sample.asr_text)
+
+
+def words(text: str) -> list[str]:
+    text = UNSPOKEN.sub(" ", unicodedata.normalize("NFC", text))
+    return WORD.findall(text.lower())
+
+
+def word_recall(expected: str, heard: str) -> float | None:
+    """Share of expected words found in order in heard (LCS length / expected word count)."""
+    ref, hyp = words(expected), words(heard)
+    if not ref:
+        return None
+    prev = [0] * (len(hyp) + 1)
+    for r in ref:
+        cur = [0]
+        for j, h in enumerate(hyp):
+            cur.append(prev[j] + 1 if r == h else max(prev[j + 1], cur[j]))
+        prev = cur
+    return round(prev[-1] / len(ref), 3)
+
+
 def error_type(response: httpx.Response) -> str:
     try:
         return str(response.json()["error"]["type"])
@@ -369,7 +477,9 @@ def summary(sample: Sample) -> str:
         f"{m['duration_s']:.2f}s ttfb={sample.ttfb_ms or 0:.0f}ms total={sample.total_ms:.0f}ms"
         f" rtf={rtf(sample)} peak={m['peak_dbfs']}dBFS"
     )
-    return text + (f" flags={m['flags']}" if m["flags"] else "")
+    if sample.word_recall is not None:
+        text += f" recall={sample.word_recall}"
+    return text + (f" flags={sample.flags}" if sample.flags else "")
 
 
 def write_wav(path: Path, pcm: bytes, rate: int) -> None:
@@ -396,6 +506,7 @@ def write_csv(path: Path, samples: list[Sample]) -> None:
                     "group": s.case.get("group", ""),
                     "questions": ",".join(map(str, s.case.get("questions", ()))),
                     "side": s.side,
+                    "normalize": "" if s.normalize is None else str(s.normalize).lower(),
                     "reference_text": (
                         "" if "clone" not in s.case
                         else "normalized" if s.side == "gateway" else "verbatim"
@@ -408,13 +519,17 @@ def write_csv(path: Path, samples: list[Sample]) -> None:
                     "rtf": rtf(s) or "",
                     **{k: "" if s.metrics.get(k) is None else s.metrics[k] for k in (
                         "duration_s", "peak_dbfs", "rms_dbfs", "lead_silence_ms",
-                        "trail_silence_ms", "clipped_samples", "flags",
+                        "trail_silence_ms", "clipped_samples",
                     )},
+                    "flags": s.flags,
+                    "word_recall": "" if s.word_recall is None else s.word_recall,
                     "text_warnings": s.warnings,
                     "known_issue": s.case.get("known_issue", ""),
                     "review_focus": s.case.get("review_focus", ""),
                     "input": s.case["input"],
                     "engine_text": s.engine_text,
+                    "sent_text": s.sent_text,
+                    "asr_text": s.asr_text or "",
                     "review_result": "",  # pass / fail / ambiguous / not-listened
                     "reviewer": "",
                     "notes": "",
@@ -452,11 +567,26 @@ def render_html(samples: list[Sample], manifest: dict) -> str:
             f" · lead {m['lead_silence_ms']} / trail {m['trail_silence_ms']} ms"
             f" · clipped {m['clipped_samples']}"
         )
-        flags = f'<div class="bad">{e(m["flags"])}</div>' if m["flags"] else ""
+        flags = f'<div class="bad">{e(s.flags)}</div>' if s.flags else ""
         warnings = f'<div class="muted">warnings: {e(s.warnings)}</div>' if s.warnings else ""
+        sent = (
+            f'<div class="muted">sent_text: {e(s.sent_text)}</div>'
+            if s.sent_text != s.engine_text
+            else ""
+        )
+        asr = ""
+        if s.asr_error:
+            asr = f'<div class="bad">ASR failed: {e(s.asr_error)}</div>'
+        elif s.asr_text is not None:
+            recall = "–" if s.word_recall is None else s.word_recall
+            low = s.word_recall is not None and s.word_recall < RECALL_THRESHOLD
+            asr = (
+                f'<div class="asr{" bad" if low else ""}"><b>ASR</b> (word_recall {recall}):'
+                f" {e(s.asr_text)}</div>"
+            )
         return (
-            f'<td><audio controls preload="none" src="{e(s.file)}"></audio>'
-            f'<div class="muted">{e(info)}</div>{flags}{warnings}{reference}</td>'
+            f'<td><audio controls preload="none" src="{e(s.file)}"></audio>{asr}'
+            f'<div class="muted">{e(info)}</div>{flags}{warnings}{sent}{reference}</td>'
         )
 
     by_case: dict[str, dict[str, Sample]] = {}
@@ -472,12 +602,21 @@ def render_html(samples: list[Sample], manifest: dict) -> str:
             else ""
         )
         questions = " ".join(f"Q{q}" for q in c.get("questions", ()))
+        normalize = ""
+        if c.get("normalize") is False:
+            normalize = (
+                '<div class="warn">normalize: false in the case; rendered with normalize on'
+                " (--normalize-on), as in production</div>"
+                if manifest["normalize_on"]
+                else '<div class="warn">normalize: false (tests cleanup only; production has'
+                " normalize on, so symbols such as @ &lt; &gt; reach the model as typed)</div>"
+            )
         focus = (
             f"<div><b>listen for:</b> {e(c['review_focus'])}</div>" if c.get("review_focus") else ""
         )
         trs.append(
             f"<tr><td><b>{e(c['id'])}</b><br><small>{e(c.get('group', ''))}"
-            f" {e(questions)}</small></td>"
+            f" {e(questions)}</small>{normalize}</td>"
             f"<td><pre>{e(c['input'])}</pre></td>"
             f"<td><pre>{e(first.engine_text)}</pre><small>{e(c['why'])}</small>{focus}{issue}</td>"
             + "".join(cell(row[side]) for side in sides)
@@ -493,18 +632,27 @@ def render_html(samples: list[Sample], manifest: dict) -> str:
             "mode",
             "voice",
             "seed",
+            "normalize_on",
             "pipeline_version",
             "git_commit",
             "started_utc",
         )
     )
+    asr_note = (
+        f"ASR: {manifest['asr']['model']}; word_recall compares each side's transcript with the"
+        f" gateway's engine text; below {RECALL_THRESHOLD} adds words_missing."
+        if manifest["asr"]
+        else ""
+    )
     return f"""<!doctype html><meta charset="utf-8"><title>OmniVoice gateway samples</title>
 <style>body{{font-family:sans-serif;margin:1em}}table{{border-collapse:collapse}}
 td,th{{border:1px solid #ccc;padding:4px;vertical-align:top}}
 pre{{white-space:pre-wrap;margin:0;max-width:28em}}.bad{{color:#b00}}
-.muted{{color:#666;font-size:.8em;max-width:22em}}</style>
+.muted{{color:#666;font-size:.8em;max-width:22em}}.asr{{font-size:.85em;max-width:22em}}
+.warn{{background:#fff3cd;font-size:.8em;max-width:14em;padding:2px}}</style>
 <h1>OmniVoice gateway samples</h1><p>{e(meta)}</p>
-<p class="muted">Flags are hints, not a quality verdict. Record review results in results.csv.</p>
+<p class="muted">Flags are hints, not a quality verdict. Record review results in results.csv.
+{e(asr_note)}</p>
 <table><tr><th>case</th><th>input text</th><th>engine text</th>{head}</tr>
 {chr(10).join(trs)}
 </table>

@@ -67,7 +67,7 @@ Ca golden nằm ở `tests/golden/pipeline.json`, chạy qua route dry-run. Mỗ
 Cần audio.cpp (`docs/USAGE.md`) và gateway đang chạy. Script đọc các ca không lỗi (mặc định golden; xem Bộ câu nghe thử), gọi cả gateway (A) lẫn audio.cpp trực tiếp (B) với cùng model, voice, seed, rồi lưu WAV, chỉ số và trang so sánh:
 
 ```bash
-uv run python scripts/render_samples.py --out outputs/listen-001   # --model, --voice, --seed, --group, --id, --no-direct
+uv run python scripts/render_samples.py --out outputs/listen-001   # --model, --voice, --seed, --group, --id, --no-direct, --normalize-on
 python -m http.server -d outputs/listen-001 9000                   # mở http://localhost:9000
 ```
 
@@ -100,6 +100,32 @@ Ca clone (`"clone": "<voice>"`) gửi `voices/<voice>.wav` dạng base64 trong `
 
 Thêm ca: thêm một dòng vào `scripts/listening_cases.json` với `id` ổn định (không đổi, không dùng lại), `group`, `questions` (danh sách 1–5, có thể rỗng), `input`, `why` (ca này để làm gì), `review_focus` (cần nghe điều gì); tuỳ chọn `language`, `normalize`, `clone`. Chỉ dùng văn bản tự viết, không dùng dữ liệu thật. Muốn so sánh hai biến thể thì thêm hai ca và nhắc id của nhau trong `review_focus`. Chạy `uv run pytest tests/test_render_samples.py` để kiểm tra bộ câu.
 
+### Chấm bằng ASR (tuỳ chọn)
+
+Để bắt lỗi mất chữ không phụ thuộc người nghe, script phiên âm từng WAV qua một endpoint transcription kiểu OpenAI (`POST <url>/v1/audio/transcriptions`, multipart `file`, `model`, `language`, `response_format=json`). Cấu hình bằng biến môi trường (hoặc `--asr-url`, `--asr-model`, `--asr-api-key`):
+
+- `OMNIVOICE_ASR_URL`: base URL của server ASR (không có `/v1`); không đặt thì không chấm, chạy như cũ và các cột ASR để trống.
+- `OMNIVOICE_ASR_MODEL`: model gửi kèm (mặc định `gipformer`).
+- `OMNIVOICE_ASR_API_KEY`: Bearer key, nếu server yêu cầu.
+
+`scripts/asr_server.py` dựng sẵn endpoint đó cho gipformer (`g-group-ai-lab/gipformer1.5-68M-rnnt`, RNN-T tiếng Việt chạy bằng sherpa-onnx). Phụ thuộc nằm trong dependency group `asr`, không vào image gateway. File ONNX tải vào `models/` (bản clone ở `references/gipformer1.5-68M-rnnt` chỉ có con trỏ Git LFS):
+
+```bash
+uv run hf download g-group-ai-lab/gipformer1.5-68M-rnnt encoder.int8.onnx decoder.int8.onnx \
+    joiner.int8.onnx tokens.txt --local-dir models/gipformer1.5-68M-rnnt
+uv run --group asr python scripts/asr_server.py --port 8090      # --precision fp32, --num-threads 8
+export OMNIVOICE_ASR_URL=http://127.0.0.1:8090
+uv run python scripts/render_samples.py --set listening --out outputs/listen-asr
+```
+
+- `asr_text`: transcript của từng phía. `word_recall`: tỉ lệ từ của engine text của gateway xuất hiện trong transcript theo đúng thứ tự (độ dài dãy con chung dài nhất / số từ), không phân biệt hoa thường, bỏ non-verbal tag, phiên âm CMU và dấu câu. Cả hai phía đều so với engine text của gateway vì đó là cách đọc mong muốn.
+- `word_recall` < 0,8 thêm flag `words_missing`; request ASR lỗi thêm `asr_failed` (`word_recall` để trống, run không vì thế mà thất bại). Trang HTML hiện transcript và `word_recall` dưới player.
+- Đây là gợi ý, không phải phán quyết: ASR viết chữ cái, từ tiếng Anh, ký hiệu khác engine text (`bê` → `B`, `hotro` → `hot cho`) nên các ca này có thể bị flag dù đọc đúng; nghe lại trước khi kết luận.
+
+### Ca `normalize: false`
+
+Nhiều ca golden (nhóm `markup`, `short-sentences`, …) đặt `normalize: false` để kiểm tra riêng bước làm sạch, nên gửi nguyên `@`, `<`, `>` tới model, khác production (normalize bật). Trang HTML gắn nhãn `normalize: false` cho các ca này và cột `normalize` của `results.csv` ghi `false`. Muốn nghe chúng như production thì thêm `--normalize-on`: bỏ qua `normalize: false` của ca, `manifest.json` ghi `normalize_on: true`, nhãn HTML đổi thành "rendered with normalize on".
+
 ### Chạy tất cả model × giọng
 
 `scripts/render_all.py` gọi `render_samples.py` cho mọi (bộ câu, model, giọng): mặc định cả `golden` lẫn `listening`, mọi model TTS trong `/v1/models`, mọi `voices/*.wav` có dòng trong `voices/prompt_text`.
@@ -113,7 +139,9 @@ python -m http.server -d outputs/render-all-001 9000
 
 - Mỗi run nằm ở `<set>/<model>/<voice>/`; nhóm chỉ gồm ca clone (tự mang audio tham chiếu) chạy một lần mỗi model ở `<set>/<model>/_clone/`.
 - Vòng ngoài là model để audio.cpp chỉ nạp mỗi model một lần. Run lỗi được ghi vào `runs.json` và không chặn run sau; exit code 1 khi có run lỗi.
-- Gộp kết quả: `all_results.csv` (mọi hàng `results.csv`, thêm `set`, `model`, `voice`, `run`), `summary.csv` (theo set, model, phía: số request, lỗi, cờ, trung vị rtf/ttfb/thời lượng), `index.html` (link tới trang của từng run).
+- Gộp kết quả: `all_results.csv` (mọi hàng `results.csv`, thêm `set`, `model`, `voice`, `run`), `summary.csv` (theo set, model, phía: số request, lỗi, cờ, số ca `words_missing`, `word_recall` trung bình, trung vị rtf/ttfb/thời lượng), `index.html` (link tới trang của từng run).
+- Tóm tắt nhiều giọng (cần ASR; biến `OMNIVOICE_ASR_*` được truyền xuống từng run): `voices.csv` theo (set, model, giọng, phía): số ca `words_missing` và `word_recall` trung bình, để chọn giọng nghe chính; `cases.csv` theo (set, model, ca, phía): số giọng mất chữ, `all_voices_missing` khi ca hỏng ở mọi giọng đã chấm. Cuối lượt chạy console in hai bảng này (giọng ít mất chữ nhất trước, run `_clone` sau cùng; chỉ ca mất chữ ở ít nhất một giọng, `ALL` = mọi giọng) và `index.html` có thêm hai bảng.
+- `--normalize-on` được truyền xuống `render_samples.py`.
 
 ### Output
 
@@ -121,13 +149,15 @@ Output trong `--out` (mặc định `outputs/samples`):
 
 - `<id>.gateway.wav`, `<id>.direct.wav`: PCM s16le mono.
 - `index.html`: input text, engine text, player A/B, chỉ số và cờ cạnh từng player.
-- `manifest.json`: `case_set` (`golden`/`listening`), `git_commit` (thêm `-dirty` nếu có thay đổi chưa commit), `pipeline_version`, `model`, `mode`, `voice`, `seed`, `started_utc`/`finished_utc`, `cases`, `groups` và `questions` (nhóm / câu hỏi → danh sách id ca), `counts` theo kết quả.
+- `manifest.json`: `case_set` (`golden`/`listening`), `git_commit` (thêm `-dirty` nếu có thay đổi chưa commit), `pipeline_version`, `model`, `mode`, `voice`, `seed`, `normalize_on`, `asr` (`url`, `model` hoặc `null`), `started_utc`/`finished_utc`, `cases`, `groups` và `questions` (nhóm / câu hỏi → danh sách id ca), `counts` theo kết quả.
 - `results.csv`: mỗi hàng là một cặp (ca, phía `gateway`/`direct`):
-  - `group`, `questions` (câu hỏi của #7, ví dụ `1,2`; lọc cột này để nghe theo câu hỏi), `reference_text` (ca clone: `normalized`/`verbatim`).
+  - `group`, `questions` (câu hỏi của #7, ví dụ `1,2`; lọc cột này để nghe theo câu hỏi), `normalize` (`false` khi ca gửi `normalize: false`), `reference_text` (ca clone: `normalized`/`verbatim`).
   - `result`: `audio` hoặc mã lỗi (`stream_aborted`, `type` lỗi của upstream/gateway, `transport_*`, `incomplete_pcm`, `bad_wav`); `http_status`, `file`.
   - Chỉ số: `duration_s`, `ttfb_ms`, `total_ms`, `rtf` (= total / duration), `peak_dbfs`, `rms_dbfs`, `lead_silence_ms`, `trail_silence_ms` (ngưỡng ~-40 dBFS), `clipped_samples`.
-  - `flags`: gợi ý chỗ cần nghe kỹ, không phải đánh giá chất lượng: `silent`, `very_short` (< 0,3 s), `clipping`, `long_lead_silence` (> 1 s), `long_trail_silence` (> 1,5 s).
-  - `text_warnings` (`X-Text-Warnings` của gateway; phía direct luôn trống), `known_issue`, `review_focus`, `input`, `engine_text`.
+  - `flags`: gợi ý chỗ cần nghe kỹ, không phải đánh giá chất lượng: `silent`, `very_short` (< 0,3 s), `clipping`, `long_lead_silence` (> 1 s), `long_trail_silence` (> 1,5 s); khi có ASR thêm `words_missing` (`word_recall` < 0,8) và `asr_failed`.
+  - `word_recall`, `asr_text`: chỉ khi có ASR (xem Chấm bằng ASR).
+  - `text_warnings` (`X-Text-Warnings` của gateway; phía direct luôn trống), `known_issue`, `review_focus`, `input`, `engine_text` (engine text của gateway, ghi cho cả hai phía).
+  - `sent_text`: text request của phía đó đưa tới model: phía gateway là engine text, phía direct là input text thô (ca clone: engine text của gateway).
   - Người nghe điền: `review_result` (`pass` / `fail` / `ambiguous` / `not-listened`), `reviewer`, `notes`.
 
 ## Test

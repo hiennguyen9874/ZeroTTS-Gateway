@@ -43,6 +43,11 @@ All under `references/` unless a URL.
 - `g-omnivoice-hf`: `g-group-ai-lab/g-omnivoice`, Vietnamese finetune with lowest WER at base-level speaker similarity; its card says to normalize text before synthesis. Served as `g-omnivoice` / `g-omnivoice-stream`.
 - `omnivoice-vietnamese-hf`: `splendor1811/omnivoice-vietnamese`, Vietnamese finetune on 1,000 h of dolly-vn data; no bundled audio tokenizer (reuses the base one). Served as `omnivoice-vietnamese`.
 
+### ASR for listening runs
+
+- `gipformer`: g-group-ai-lab's Vietnamese ASR code; `infer_onnx.py` shows the sherpa-onnx transducer setup that `scripts/asr_server.py` mirrors.
+- `gipformer1.5-68M-rnnt`: the model card and config only (ONNX files are Git LFS pointers); download the files into `models/gipformer1.5-68M-rnnt` (README, "Chấm bằng ASR").
+
 ### Vietnamese text processing
 
 - `sea-g2p`: the chosen normalizer (ADR 0002). Rust core with Python bindings and a C ABI; use `Normalizer("vi")`, not the G2P/phonemizer path. Read `python/` and `src/` when debugging a mis-reading or a known issue.

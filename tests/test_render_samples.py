@@ -8,6 +8,7 @@ import base64
 import csv
 import io
 import json
+import os
 import re
 import subprocess
 import sys
@@ -76,20 +77,85 @@ def odd_chunks(data: bytes, size: int = 4097) -> list[bytes]:
     return [data[i : i + size] for i in range(0, len(data), size)]
 
 
+def script_env(**extra: str) -> dict:
+    """The test process env without an operator's ASR settings, plus extra."""
+    env = {k: v for k, v in os.environ.items() if not k.startswith("OMNIVOICE_ASR_")}
+    return env | extra
+
+
 @pytest.fixture
 def run(live_gateway, live_upstream, upstream, tmp_path):
     upstream.on("GET", "/v1/models", lambda r: httpx.Response(200, json=MODELS))
     gateway = live_gateway()
 
-    def render(*args: str, out: Path | None = None) -> subprocess.CompletedProcess:
+    def render(
+        *args: str, out: Path | None = None, env: dict | None = None
+    ) -> subprocess.CompletedProcess:
         out = out or tmp_path / "out"
         command = [sys.executable, str(SCRIPT), "--gateway", gateway, "--upstream", live_upstream]
         return subprocess.run(
-            [*command, "--out", str(out), *args], capture_output=True, text=True, timeout=300
+            [*command, "--out", str(out), *args],
+            capture_output=True,
+            text=True,
+            timeout=300,
+            env=script_env(**(env or {})),
         )
 
     render.gateway = gateway
     return render
+
+
+class FakeAsr:
+    """OpenAI-style transcription server. `answer(request)` gives the transcript, or None for a
+    500. Each request is recorded as a dict: form fields, filename, size, authorization."""
+
+    def __init__(self):
+        self.requests: list[dict] = []
+        self.answer = lambda request: ""
+
+    async def __call__(self, scope, receive, send):
+        body = b""
+        while True:
+            message = await receive()
+            body += message.get("body", b"")
+            if not message.get("more_body"):
+                break
+        headers = dict(scope["headers"])
+        fields = {
+            name.decode(): value.decode()
+            for name, value in re.findall(rb'name="(\w+)"\r\n\r\n(.*?)\r\n', body)
+        }
+        filename = re.search(rb'filename="([^"]+)"', body)
+        request = {
+            **fields,
+            "path": scope["path"],
+            "filename": filename.group(1).decode() if filename else None,
+            "size": len(body),
+            "authorization": headers.get(b"authorization", b"").decode(),
+        }
+        self.requests.append(request)
+        text = self.answer(request)
+        status, payload = (
+            (200, {"text": text})
+            if text is not None
+            else (500, {"error": {"message": "boom", "type": "server_error"}})
+        )
+        data = json.dumps(payload).encode()
+        await send(
+            {
+                "type": "http.response.start",
+                "status": status,
+                "headers": [(b"content-type", b"application/json")],
+            }
+        )
+        await send({"type": "http.response.body", "body": data})
+
+
+@pytest.fixture
+def asr(serve):
+    fake = FakeAsr()
+    fake.url = serve(fake, lifespan="off")
+    return fake
 
 
 def read_rows(out: Path) -> list[dict]:
@@ -113,6 +179,7 @@ def test_renders_golden_set_for_listening(run, upstream, tmp_path, model, stream
         (case["id"], side) for case in AUDIO_CASES for side in ("gateway", "direct")
     ]
     warnings = {case["id"]: ",".join(case["warnings"]) for case in AUDIO_CASES}
+    by_id = {case["id"]: case for case in AUDIO_CASES}
     for row in rows:
         assert row["result"] == "audio", row
         assert row["review_result"] == row["reviewer"] == row["notes"] == ""
@@ -125,6 +192,16 @@ def test_renders_golden_set_for_listening(run, upstream, tmp_path, model, stream
         assert float(row["rtf"]) > 0
         expected = warnings[row["case_id"]] if row["side"] == "gateway" else ""
         assert row["text_warnings"] == expected, row["case_id"]
+        # Each side records the text its request carried: engine text via the gateway, the
+        # input text sent straight to the upstream.
+        sent = row["engine_text"] if row["side"] == "gateway" else by_id[row["case_id"]]["input"]
+        assert row["sent_text"] == sent, row["case_id"]
+        assert row["normalize"] == (
+            "false" if by_id[row["case_id"]].get("normalize") is False else ""
+        )
+        # No ASR configured: the run is as before, ASR columns blank.
+        assert row["asr_text"] == row["word_recall"] == ""
+        assert "words_missing" not in row["flags"]
         with wave.open(str(out / row["file"])) as w:
             assert (w.getframerate(), w.getnchannels(), w.getsampwidth()) == (RATE, 1, 2)
             assert w.readframes(w.getnframes()) == audio
@@ -151,6 +228,7 @@ def test_renders_golden_set_for_listening(run, upstream, tmp_path, model, stream
     )
     assert manifest["mode"] == ("streaming" if streaming else "offline")
     assert manifest["cases"] == len(AUDIO_CASES)
+    assert manifest["asr"] is None
     assert re.fullmatch(r"[0-9a-f]{40}(-dirty)?", manifest["git_commit"])
     datetime.fromisoformat(manifest["started_utc"])
 
@@ -275,6 +353,9 @@ def test_renders_listening_set_with_questions_and_clone_sides(run, upstream, tmp
             ("normalized" if row["side"] == "gateway" else "verbatim") if "clone" in case else ""
         )
         assert row["reference_text"] == expected, row["case_id"]
+        # Clone direct side sends the gateway's engine text, so both sides sent the same input.
+        sent = row["engine_text"] if row["side"] == "gateway" or "clone" in case else case["input"]
+        assert row["sent_text"] == sent, row["case_id"]
 
     manifest = json.loads((out / "manifest.json").read_text("utf-8"))
     assert manifest["case_set"] == "listening"
@@ -353,3 +434,158 @@ def test_render_all_runs_every_voice_once_and_clone_cases_once_per_model(
     again = subprocess.run(command, capture_output=True, text=True, timeout=300)
     assert again.returncode == 0, again.stderr
     assert len(upstream.calls("POST", SPEECH)) == len(sent)
+
+
+def test_asr_scores_both_sides_against_the_gateway_engine_text(run, upstream, asr, tmp_path):
+    upstream.on("POST", SPEECH, speaker(lambda body: [pcm((0.5, 1000))]))
+    asr.answer = lambda request: {
+        "tag-middle.gateway.wav": "TÔI NÓI THẬT ĐẤY NHƯNG KHÔNG AI TIN",  # no tag/punctuation
+        "tag-middle.direct.wav": "tôi nói thật đấy",  # second half lost
+        "abbr-vi-admin.gateway.wav": None,  # ASR server error
+        "abbr-vi-admin.direct.wav": "",
+    }[request["filename"]]
+    out = tmp_path / "out"
+    env = {
+        "OMNIVOICE_ASR_URL": asr.url,
+        "OMNIVOICE_ASR_MODEL": "gipformer-test",
+        "OMNIVOICE_ASR_API_KEY": "asr-key",
+    }
+
+    result = run("--set", "listening", "--id", "tag-middle", "--id", "abbr-vi-admin", env=env)
+
+    # An ASR failure is a missing score, not a failed render.
+    assert result.returncode == 0, result.stderr
+    rows = {(r["case_id"], r["side"]): r for r in read_rows(out)}
+    scores = {key: (r["asr_text"], r["word_recall"], r["flags"]) for key, r in rows.items()}
+    assert scores == {
+        ("tag-middle", "gateway"): ("TÔI NÓI THẬT ĐẤY NHƯNG KHÔNG AI TIN", "1.0", ""),
+        ("tag-middle", "direct"): ("tôi nói thật đấy", "0.5", "words_missing"),
+        ("abbr-vi-admin", "gateway"): ("", "", "asr_failed"),
+        ("abbr-vi-admin", "direct"): ("", "0.0", "words_missing"),
+    }
+    # Both sides are scored against the gateway's engine text; the direct side sent raw input.
+    middle = next(c for c in LISTENING if c["id"] == "tag-middle")
+    assert "[sigh]" in rows[("tag-middle", "gateway")]["engine_text"]
+    assert rows[("tag-middle", "direct")]["sent_text"] == middle["input"]
+
+    assert [r["filename"] for r in asr.requests] == [
+        "abbr-vi-admin.gateway.wav", "abbr-vi-admin.direct.wav",
+        "tag-middle.gateway.wav", "tag-middle.direct.wav",
+    ]  # fmt: skip
+    for request in asr.requests:
+        assert request["path"] == "/v1/audio/transcriptions"
+        assert (request["model"], request["language"], request["response_format"]) == (
+            "gipformer-test",
+            "vi",
+            "json",
+        )
+        assert request["authorization"] == "Bearer asr-key"
+
+    manifest = json.loads((out / "manifest.json").read_text("utf-8"))
+    assert manifest["asr"] == {"url": asr.url, "model": "gipformer-test"}
+    assert (manifest["counts"]["words_missing"], manifest["counts"]["asr_failed"]) == (2, 1)
+    page = (out / "index.html").read_text("utf-8")
+    assert "TÔI NÓI THẬT ĐẤY NHƯNG KHÔNG AI TIN" in page
+    assert "word_recall 0.5" in page and "ASR failed" in page
+    console = result.stdout + result.stderr
+    assert "recall=0.5" in console and "words_missing" in console
+    assert "TÔI NÓI" not in console and "tôi nói" not in console
+
+
+def test_normalize_false_cases_are_marked_and_can_render_as_production(run, upstream, tmp_path):
+    upstream.on("POST", SPEECH, speaker(lambda body: [pcm((0.5, 1000))]))
+    case = next(c for c in AUDIO_CASES if c["id"] == "email-kept")
+    out = tmp_path / "out"
+
+    result = run("--id", "email-kept", "--no-direct")
+
+    assert result.returncode == 0, result.stderr
+    [row] = read_rows(out)
+    assert (row["normalize"], row["engine_text"]) == ("false", case["expected"])
+    assert "normalize: false" in (out / "index.html").read_text("utf-8")
+
+    result = run("--id", "email-kept", "--no-direct", "--normalize-on", "--overwrite")
+
+    assert result.returncode == 0, result.stderr
+    [row] = read_rows(out)
+    assert row["normalize"] == ""
+    assert "@" not in row["engine_text"]  # normalized as in production
+    assert upstream.last_json()["input"] == row["engine_text"] == row["sent_text"]
+    assert json.loads((out / "manifest.json").read_text("utf-8"))["normalize_on"] is True
+    assert "rendered with normalize on" in (out / "index.html").read_text("utf-8")
+
+
+def test_render_all_summarizes_missing_words_by_voice_and_case(
+    live_gateway, live_upstream, upstream, asr, tmp_path
+):
+    # Voices are told apart at the ASR by audio length: Duc_Tri gets longer audio.
+    upstream.on("GET", "/v1/models", lambda r: httpx.Response(200, json=MODELS))
+    upstream.on(
+        "POST",
+        SPEECH,
+        speaker(
+            lambda body: [pcm((1.0 if body.get("voice") == "vieneu_v3_Duc_Tri" else 0.5, 1000))]
+        ),
+    )
+    gateway = live_gateway()
+    engine = {
+        c["id"]: httpx.post(
+            gateway + "/v1/text/normalize",
+            json={"input": c["input"], "language": c.get("language", "vi")}
+            | ({"text_processing": {"normalize": c["normalize"]}} if "normalize" in c else {}),
+        ).json()["engine_text"]
+        for c in LISTENING
+    }
+
+    def answer(request: dict) -> str:
+        case_id = request["filename"].split(".")[0]
+        duc_tri = request["size"] > 36000
+        if case_id == "hard-short-a" or (case_id == "tag-control" and duc_tri):
+            return ""
+        return engine[case_id]
+
+    asr.answer = answer
+    out = tmp_path / "all"
+    command = [
+        sys.executable, str(ROOT / "scripts" / "render_all.py"), "--gateway", gateway,
+        "--upstream", live_upstream, "--set", "listening", "--model", "g-omnivoice",
+        "--no-direct", "--out", str(out), "--voice", "vieneu_v3_Mai_Anh",
+        "--voice", "vieneu_v3_Duc_Tri",
+    ]  # fmt: skip
+
+    result = subprocess.run(
+        command, capture_output=True, text=True, timeout=300,
+        env=script_env(OMNIVOICE_ASR_URL=asr.url),
+    )  # fmt: skip
+
+    assert result.returncode == 0, result.stderr
+    with (out / "voices.csv").open(encoding="utf-8", newline="") as f:
+        voices = {r["voice"]: r for r in csv.DictReader(f)}
+    voiced = sum("clone" not in c for c in LISTENING)
+    assert {v: (r["asr_scored"], r["words_missing"]) for v, r in voices.items()} == {
+        "vieneu_v3_Mai_Anh": (str(voiced), "1"),
+        "vieneu_v3_Duc_Tri": (str(voiced), "2"),
+        "_clone": (str(len(LISTENING) - voiced), "0"),
+    }
+    assert float(voices["vieneu_v3_Mai_Anh"]["mean_word_recall"]) > float(
+        voices["vieneu_v3_Duc_Tri"]["mean_word_recall"]
+    )
+    with (out / "cases.csv").open(encoding="utf-8", newline="") as f:
+        cases = {r["case_id"]: r for r in csv.DictReader(f)}
+    assert (
+        cases["hard-short-a"]["words_missing_voices"],
+        cases["hard-short-a"]["all_voices_missing"],
+    ) == ("2", "True")
+    assert (
+        cases["tag-control"]["words_missing_voices"],
+        cases["tag-control"]["all_voices_missing"],
+    ) == ("1", "False")
+    assert cases["tag-middle"]["words_missing_voices"] == "0"
+
+    console = result.stdout
+    by_voice = console[console.index("by voice") : console.index("by case")]
+    assert by_voice.index("vieneu_v3_Mai_Anh") < by_voice.index("vieneu_v3_Duc_Tri")
+    assert re.search(r"hard-short-a\s+2/2 ALL", console)
+    assert re.search(r"tag-control\s+1/2\n", console)
+    page = (out / "index.html").read_text("utf-8")
+    assert "By voice" in page and "By case" in page

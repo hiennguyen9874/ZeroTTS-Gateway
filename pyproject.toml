@@ -28,6 +28,12 @@ build-backend = "uv_build"
 testpaths = ["tests"]
 
 [dependency-groups]
+asr = [
+    "numpy>=2.5.4",
+    "python-multipart>=0.0.32",
+    "sherpa-onnx>=1.12",
+    "sherpa-onnx-core>=1.12",
+]
 dev = [
     "pytest>=9.1.1",
     "ruff>=0.8",
