@@ -93,6 +93,11 @@ def elapsed_ms(start: float) -> float:
     return round((time.perf_counter() - start) * 1000, 1)
 
 
+def upstream_error(exc: httpx.TransportError) -> str:
+    """Content-free log value for a transport failure."""
+    return "connect_timeout" if isinstance(exc, httpx.ConnectTimeout) else "transport_error"
+
+
 def error_response(status: int, type_: str, message: str) -> JSONResponse:
     # Same shape as audio.cpp; message must never contain request text.
     return JSONResponse({"error": {"message": message, "type": type_}}, status_code=status)
@@ -104,7 +109,13 @@ def create_app(settings: Settings, transport: httpx.AsyncBaseTransport | None = 
         pipeline.load_lexicon(settings.lexicon_path) if settings.lexicon_path else None,
         max_chars=settings.max_input_chars,
     )
-    client = httpx.AsyncClient(base_url=settings.upstream_url, transport=transport, timeout=None)
+    # No read/write/pool timeout: an offline model may send its first byte only after synthesizing
+    # the whole text, so the absolute deadline is the only limit after connecting.
+    client = httpx.AsyncClient(
+        base_url=settings.upstream_url,
+        transport=transport,
+        timeout=httpx.Timeout(None, connect=settings.connect_timeout_s),
+    )
 
     @asynccontextmanager
     async def lifespan(_app):
@@ -140,7 +151,8 @@ def create_app(settings: Settings, transport: httpx.AsyncBaseTransport | None = 
             raise GatewayError(
                 504, "upstream_timeout", "upstream did not respond before the deadline"
             ) from None
-        except httpx.TransportError:
+        except httpx.TransportError as exc:
+            request.state.log["upstream_error"] = upstream_error(exc)
             raise GatewayError(
                 502, "upstream_unavailable", "could not connect to upstream"
             ) from None
@@ -184,7 +196,8 @@ def create_app(settings: Settings, transport: httpx.AsyncBaseTransport | None = 
             raise GatewayError(
                 504, "upstream_timeout", "upstream did not respond before the deadline"
             ) from None
-        except httpx.TransportError:
+        except httpx.TransportError as exc:
+            request.state.log["upstream_error"] = upstream_error(exc)
             raise GatewayError(
                 502, "upstream_unavailable", "could not connect to upstream"
             ) from None
@@ -215,7 +228,7 @@ def create_app(settings: Settings, transport: httpx.AsyncBaseTransport | None = 
         return {"status": "ok"}
 
     @app.get("/ready")
-    async def ready():
+    async def ready(request: Request):
         try:
             async with asyncio.timeout(READY_TIMEOUT_S):
                 for path in ("/health", "/v1/models"):
@@ -223,7 +236,10 @@ def create_app(settings: Settings, transport: httpx.AsyncBaseTransport | None = 
                         raise GatewayError(
                             503, "upstream_unavailable", f"upstream {path} is not OK"
                         )
-        except (TimeoutError, httpx.TransportError):
+        except (TimeoutError, httpx.TransportError) as exc:
+            request.state.log["upstream_error"] = (
+                upstream_error(exc) if isinstance(exc, httpx.TransportError) else "ready_timeout"
+            )
             raise GatewayError(503, "upstream_unavailable", "upstream is not reachable") from None
         return {"status": "ready"}
 

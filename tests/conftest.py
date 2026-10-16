@@ -55,12 +55,15 @@ Handler = Callable[[httpx.Request], httpx.Response | Awaitable[httpx.Response]]
 class FakeUpstream:
     """Records every request; routes are (method, path) -> handler.
 
-    `down` simulates a refused connection.
+    `down` simulates a refused connection. `blackhole` simulates a host that never answers the
+    connect: like a network transport it waits for the client's connect timeout (forever if none),
+    then raises ConnectTimeout.
     """
 
     def __init__(self):
         self.requests: list[httpx.Request] = []
         self.down = False
+        self.blackhole = False
         self.routes: dict[tuple[str, str], Handler] = {
             ("GET", "/health"): lambda r: httpx.Response(200, json={"status": "ok"}),
             ("GET", "/v1/models"): lambda r: httpx.Response(
@@ -95,6 +98,12 @@ class FakeUpstream:
         self.requests.append(request)
         if self.down:
             raise httpx.ConnectError("connection refused", request=request)
+        if self.blackhole:
+            connect_timeout = request.extensions.get("timeout", {}).get("connect")
+            if connect_timeout is None:
+                await asyncio.Event().wait()
+            await asyncio.sleep(connect_timeout)
+            raise httpx.ConnectTimeout("connect timed out", request=request)
         handler = self.routes.get((request.method, request.url.path))
         if handler is None:
             return httpx.Response(

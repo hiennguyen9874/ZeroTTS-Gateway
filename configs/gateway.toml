@@ -4,7 +4,11 @@
 upstream_url = "http://127.0.0.1:8080"
 host = "127.0.0.1"
 port = 8000
+# Absolute limit per request: waiting for the first byte plus streaming the whole body.
 deadline_s = 300
+# Limit on connecting to the upstream only; past it callers get 502 upstream_unavailable and
+# /ready returns 503 instead of waiting out deadline_s. Not a read timeout.
+connect_timeout_s = 3
 max_input_chars = 5000
 # Pronunciation lexicon (CSV: word,replacement,note), relative to this file; read at startup.
 lexicon_path = "lexicon.csv"

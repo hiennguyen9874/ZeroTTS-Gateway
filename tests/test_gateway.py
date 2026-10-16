@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import time
 
 import httpx
 import pytest
@@ -156,6 +157,31 @@ def test_speech_upstream_deadline(make_client, upstream):
     assert_error(response, 504, "upstream_timeout")
 
 
+def test_speech_connect_timeout_fails_fast_before_deadline(make_client, upstream):
+    upstream.blackhole = True
+    client = make_client(deadline_s=5, connect_timeout_s=0.05)
+
+    start = time.perf_counter()
+    response = client.post(SPEECH, json=speech_body())
+
+    assert_error(response, 502, "upstream_unavailable")
+    assert time.perf_counter() - start < 1
+
+
+def test_connect_timeout_does_not_limit_slow_upstream_after_connect(make_client, upstream):
+    async def slow(request):
+        await asyncio.sleep(0.2)
+        return httpx.Response(200, content=WAV, headers={"content-type": "audio/wav"})
+
+    upstream.on("POST", SPEECH, slow)
+    client = make_client(connect_timeout_s=0.01)
+
+    response = client.post(SPEECH, json=speech_body())
+
+    assert response.status_code == 200
+    assert response.content == WAV
+
+
 # --- passthrough routes ------------------------------------------------------
 
 
@@ -186,6 +212,18 @@ def test_passthrough_upstream_unreachable(client, upstream):
     assert_error(client.get("/v1/audio/voices"), 502, "upstream_unavailable")
 
 
+@pytest.mark.parametrize("path", ["/v1/models", "/v1/audio/voices"])
+def test_passthrough_connect_timeout_fails_fast_before_deadline(make_client, upstream, path):
+    upstream.blackhole = True
+    client = make_client(deadline_s=5, connect_timeout_s=0.05)
+
+    start = time.perf_counter()
+    response = client.get(path)
+
+    assert_error(response, 502, "upstream_unavailable")
+    assert time.perf_counter() - start < 1
+
+
 # --- health / ready ----------------------------------------------------------
 
 
@@ -209,6 +247,17 @@ def test_ready_503_when_upstream_down(client, upstream):
     upstream.down = True
 
     assert_error(client.get("/ready"), 503, "upstream_unavailable")
+
+
+def test_ready_503_on_connect_timeout(make_client, upstream):
+    upstream.blackhole = True
+    client = make_client(connect_timeout_s=0.05)
+
+    start = time.perf_counter()
+    response = client.get("/ready")
+
+    assert_error(response, 503, "upstream_unavailable")
+    assert time.perf_counter() - start < 1
 
 
 @pytest.mark.parametrize("failing", ["/health", "/v1/models"])
@@ -263,6 +312,14 @@ def test_no_api_key_means_no_auth(client, method, path):
 
 
 # --- config ------------------------------------------------------------------
+
+
+def test_connect_timeout_defaults_to_3s_and_is_configurable(tmp_path):
+    config = tmp_path / "gateway.toml"
+    config.write_text("connect_timeout_s = 0.5\n")
+
+    assert load_settings(env={}).connect_timeout_s == 3
+    assert load_settings(config, env={}).connect_timeout_s == 0.5
 
 
 def test_config_file_with_env_overrides(make_client, upstream, tmp_path):
@@ -334,3 +391,21 @@ def test_logs_are_structured_and_contain_no_text(client, upstream, caplog):
     dumped = caplog.text + json.dumps([r.fields for r in records], ensure_ascii=False)
     assert secret_input not in dumped
     assert secret_ref not in dumped
+
+
+@pytest.mark.parametrize(
+    ("method", "path"), [("POST", SPEECH), ("GET", "/v1/models"), ("GET", "/ready")]
+)
+def test_log_records_connect_timeout_without_text(make_client, upstream, caplog, method, path):
+    caplog.set_level(logging.INFO, logger="omnivoice_gateway")
+    upstream.blackhole = True
+    client = make_client(connect_timeout_s=0.05)
+    secret = "Nội dung bí mật của người dùng"
+
+    client.request(method, path, json=speech_body(input=secret) if method == "POST" else None)
+
+    records = [r for r in caplog.records if r.name == "omnivoice_gateway"]
+    fields = records[-1].fields
+    assert fields["path"] == path
+    assert fields["upstream_error"] == "connect_timeout"
+    assert secret not in caplog.text + json.dumps([r.fields for r in records], ensure_ascii=False)

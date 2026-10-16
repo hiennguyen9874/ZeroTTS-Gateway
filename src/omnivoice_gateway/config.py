@@ -23,6 +23,8 @@ class Settings:
     # Secret: only read from the environment, never from the config file.
     api_key: str | None = None
     deadline_s: float = 300.0
+    # Connect only; once connected, deadline_s is the only limit on waiting and streaming.
+    connect_timeout_s: float = 3.0
     max_input_chars: int = 5000
     host: str = "127.0.0.1"
     port: int = 8000
