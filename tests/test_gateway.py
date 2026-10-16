@@ -281,6 +281,10 @@ def test_logs_are_structured_and_contain_no_text(client, upstream, caplog):
     assert fields["status"] == 200
     assert fields["model"] == "g-omnivoice"
     assert fields["input_chars"] == len(secret_input)
+    assert fields["engine_chars"] == len(secret_input) + 1  # pipeline adds the final period
+    assert fields["language"] is None
+    assert fields["warnings"] == []
+    assert fields["pipeline_ms"] >= 0
     dumped = caplog.text + json.dumps([r.fields for r in records], ensure_ascii=False)
     assert secret_input not in dumped
     assert secret_ref not in dumped

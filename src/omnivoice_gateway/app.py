@@ -11,7 +11,8 @@ import httpx
 from fastapi import Depends, FastAPI, Header, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
-from .config import Settings
+from . import text as pipeline
+from .config import ModelDefaults, Settings
 
 log = logging.getLogger("omnivoice_gateway")
 
@@ -64,8 +65,8 @@ class RequestLog:
 class UpstreamStreamingResponse(StreamingResponse):
     """Streams an upstream body; always closes the upstream response, also when the caller disconnects."""
 
-    def __init__(self, upstream: httpx.Response, body, fields: dict):
-        super().__init__(body, upstream.status_code, media_type=upstream.headers.get("content-type"))
+    def __init__(self, upstream: httpx.Response, body, fields: dict, headers: dict[str, str]):
+        super().__init__(body, upstream.status_code, headers, media_type=upstream.headers.get("content-type"))
         self.upstream, self.fields = upstream, fields
 
     async def __call__(self, scope, receive, send):
@@ -122,8 +123,8 @@ def create_app(settings: Settings, transport: httpx.AsyncBaseTransport | None = 
         request.state.log["upstream_status"] = upstream.status_code
         return Response(upstream.content, upstream.status_code, media_type=upstream.headers.get("content-type"))
 
-    async def stream(request: Request, path: str, body: dict) -> Response:
-        """One upstream request, no retry. Each chunk is passed on as it arrives.
+    async def stream(request: Request, path: str, body: dict, headers: dict[str, str]) -> Response:
+        """One upstream request, no retry. Each chunk is passed on as it arrives; `headers` go on success only.
 
         The deadline is absolute: before the first body byte it becomes a 504; after that the
         caller connection is aborted, as it is when the upstream breaks mid-stream.
@@ -169,7 +170,7 @@ def create_app(settings: Settings, transport: httpx.AsyncBaseTransport | None = 
                     raise StreamAborted("upstream broke mid-stream") from None
                 yield chunk
 
-        return UpstreamStreamingResponse(upstream, body(), fields)
+        return UpstreamStreamingResponse(upstream, body(), fields, headers)
 
     @app.get("/health")
     async def health():
@@ -194,23 +195,71 @@ def create_app(settings: Settings, transport: httpx.AsyncBaseTransport | None = 
     async def voices(request: Request):
         return await forward(request, "GET", "/v1/audio/voices")
 
+    def prepare_text(request: Request, body: dict) -> tuple[str, list[str], str | None]:
+        """Run the text pipeline on body["input"]; returns (engine text, warnings, effective language)."""
+        defaults = settings.models.get(body.get("model")) or ModelDefaults()
+        language = body.get("language")
+        if language is None:
+            language = defaults.language
+        normalize = body.get("text_processing", {}).get("normalize", defaults.normalize)
+        fields = request.state.log
+        fields.update(model=body.get("model"), language=language, input_chars=len(body["input"]))
+        start = time.perf_counter()
+        try:
+            engine_text, warnings = pipeline.process(
+                body["input"],
+                max_chars=settings.max_input_chars,
+                vietnamese=normalize and pipeline.is_vietnamese(language),
+            )
+        except pipeline.TextError as exc:
+            fields["text_error"] = exc.type
+            raise GatewayError(400, exc.type, str(exc))
+        finally:
+            fields["pipeline_ms"] = elapsed_ms(start)
+        fields.update(engine_chars=len(engine_text), warnings=warnings)
+        return engine_text, warnings, language
+
+    @app.post("/v1/text/normalize", dependencies=[Depends(require_auth)])
+    async def normalize(request: Request):
+        body = await read_body(request, required=("input",))
+        engine_text, warnings, language = prepare_text(request, body)
+        return {
+            "engine_text": engine_text,
+            "warnings": warnings,
+            "language": language,
+            "pipeline_version": pipeline.PIPELINE_VERSION,
+        }
+
     @app.post("/v1/audio/speech", dependencies=[Depends(require_auth)])
     async def speech(request: Request):
-        try:
-            body = json.loads(await request.body())
-        except ValueError:
-            raise GatewayError(400, "invalid_request", "request body must be valid JSON")
-        if not isinstance(body, dict):
-            raise GatewayError(400, "invalid_request", "request body must be a JSON object")
-        for key in ("model", "input"):
-            if not isinstance(body.get(key), str):
-                raise GatewayError(400, "invalid_request", f"'{key}' must be a string")
-        request.state.log.update(model=body["model"], input_chars=len(body["input"]))
+        body = await read_body(request, required=("model", "input"))
         check_voice_ref(body)
+        body["input"], warnings, _ = prepare_text(request, body)
         body.pop("text_processing", None)
-        return await stream(request, "/v1/audio/speech", body)
+        headers = {"X-Text-Pipeline-Version": pipeline.PIPELINE_VERSION}
+        if warnings:
+            headers["X-Text-Warnings"] = ",".join(warnings)
+        return await stream(request, "/v1/audio/speech", body, headers)
 
     return app
+
+
+async def read_body(request: Request, required: tuple[str, ...]) -> dict:
+    try:
+        body = json.loads(await request.body())
+    except ValueError:
+        raise GatewayError(400, "invalid_request", "request body must be valid JSON")
+    if not isinstance(body, dict):
+        raise GatewayError(400, "invalid_request", "request body must be a JSON object")
+    for key in ("model", "input", "language"):
+        if (key in required or body.get(key) is not None) and not isinstance(body.get(key), str):
+            raise GatewayError(400, "invalid_request", f"'{key}' must be a string")
+    if body.get("text_processing") is None:
+        body.pop("text_processing", None)
+    options = body.get("text_processing", {})
+    if not isinstance(options, dict) or not isinstance(options.get("normalize", True), bool):
+        raise GatewayError(400, "invalid_request", "'text_processing' must be an object with boolean 'normalize'")
+    return body
 
 
 def check_voice_ref(body: dict) -> None:
