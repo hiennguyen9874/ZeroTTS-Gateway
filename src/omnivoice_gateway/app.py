@@ -9,7 +9,7 @@ from contextlib import asynccontextmanager
 
 import httpx
 from fastapi import Depends, FastAPI, Header, Request
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from .config import Settings
 
@@ -21,6 +21,64 @@ READY_TIMEOUT_S = 5.0
 class GatewayError(Exception):
     def __init__(self, status: int, type_: str, message: str):
         self.status, self.type, self.message = status, type_, message
+
+
+class StreamAborted(Exception):
+    """Raised inside a started response body so the server drops the connection instead of ending the stream."""
+
+
+class RequestLog:
+    """Logs one content-free record per request after the response body has been fully sent (or aborted)."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            return await self.app(scope, receive, send)
+        start = time.perf_counter()
+        fields = {}
+        # Routes add fields through request.state.log, which is backed by scope["state"].
+        scope.setdefault("state", {})["log"] = fields
+        status = None
+
+        async def send_and_record(message):
+            nonlocal status
+            if message["type"] == "http.response.start":
+                status = message["status"]
+            await send(message)
+
+        try:
+            await self.app(scope, receive, send_and_record)
+        finally:
+            fields = {
+                "method": scope["method"],
+                "path": scope["path"],
+                "status": status,
+                "total_ms": elapsed_ms(start),
+                **fields,
+            }
+            log.info("request", extra={"fields": fields})
+
+
+class UpstreamStreamingResponse(StreamingResponse):
+    """Streams an upstream body; always closes the upstream response, also when the caller disconnects."""
+
+    def __init__(self, upstream: httpx.Response, body, fields: dict):
+        super().__init__(body, upstream.status_code, media_type=upstream.headers.get("content-type"))
+        self.upstream, self.fields = upstream, fields
+
+    async def __call__(self, scope, receive, send):
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            # The body generator records how it ended; if it did not, the caller went away first.
+            self.fields.setdefault("stream_end", "caller_disconnected")
+            await self.upstream.aclose()
+
+
+def elapsed_ms(start: float) -> float:
+    return round((time.perf_counter() - start) * 1000, 1)
 
 
 def error_response(status: int, type_: str, message: str) -> JSONResponse:
@@ -42,20 +100,7 @@ def create_app(settings: Settings, transport: httpx.AsyncBaseTransport | None = 
     async def handle_gateway_error(_request: Request, exc: GatewayError):
         return error_response(exc.status, exc.type, exc.message)
 
-    @app.middleware("http")
-    async def log_request(request: Request, call_next):
-        start = time.perf_counter()
-        request.state.log = {}
-        response = await call_next(request)
-        fields = {
-            "method": request.method,
-            "path": request.url.path,
-            "status": response.status_code,
-            "total_ms": round((time.perf_counter() - start) * 1000, 1),
-            **request.state.log,
-        }
-        log.info("request", extra={"fields": fields})
-        return response
+    app.add_middleware(RequestLog)
 
     async def require_auth(authorization: str | None = Header(default=None)):
         if settings.api_key is None:
@@ -76,6 +121,55 @@ def create_app(settings: Settings, transport: httpx.AsyncBaseTransport | None = 
             raise GatewayError(502, "upstream_unavailable", "could not connect to upstream")
         request.state.log["upstream_status"] = upstream.status_code
         return Response(upstream.content, upstream.status_code, media_type=upstream.headers.get("content-type"))
+
+    async def stream(request: Request, path: str, body: dict) -> Response:
+        """One upstream request, no retry. Each chunk is passed on as it arrives.
+
+        The deadline is absolute: before the first body byte it becomes a 504; after that the
+        caller connection is aborted, as it is when the upstream breaks mid-stream.
+        """
+        fields = request.state.log
+        deadline = asyncio.get_running_loop().time() + settings.deadline_s
+        start = time.perf_counter()
+        try:
+            async with asyncio.timeout_at(deadline):
+                upstream = await client.send(client.build_request("POST", path, json=body), stream=True)
+                try:
+                    fields["upstream_status"] = upstream.status_code
+                    if not upstream.is_success:
+                        # Upstream errors are small JSON bodies; pass them through whole.
+                        content = await upstream.aread()
+                        return Response(content, upstream.status_code, media_type=upstream.headers.get("content-type"))
+                    chunks = upstream.aiter_raw()
+                    first = await anext(chunks, b"")
+                except BaseException:
+                    await upstream.aclose()
+                    raise
+        except TimeoutError:
+            raise GatewayError(504, "upstream_timeout", "upstream did not respond before the deadline")
+        except httpx.TransportError:
+            raise GatewayError(502, "upstream_unavailable", "could not connect to upstream")
+        fields["upstream_ttfb_ms"] = elapsed_ms(start)
+
+        async def body():
+            if first:
+                yield first
+            while True:
+                try:
+                    async with asyncio.timeout_at(deadline):
+                        chunk = await anext(chunks)
+                except StopAsyncIteration:
+                    fields["stream_end"] = "complete"
+                    return
+                except TimeoutError:
+                    fields["stream_end"] = "upstream_timeout"
+                    raise StreamAborted("deadline exceeded mid-stream") from None
+                except httpx.TransportError:
+                    fields["stream_end"] = "upstream_disconnected"
+                    raise StreamAborted("upstream broke mid-stream") from None
+                yield chunk
+
+        return UpstreamStreamingResponse(upstream, body(), fields)
 
     @app.get("/health")
     async def health():
@@ -114,7 +208,7 @@ def create_app(settings: Settings, transport: httpx.AsyncBaseTransport | None = 
         request.state.log.update(model=body["model"], input_chars=len(body["input"]))
         check_voice_ref(body)
         body.pop("text_processing", None)
-        return await forward(request, "POST", "/v1/audio/speech", body)
+        return await stream(request, "/v1/audio/speech", body)
 
     return app
 
