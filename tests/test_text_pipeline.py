@@ -27,6 +27,7 @@ def test_golden_cases_are_well_formed():
     assert len(ids) == len(set(ids))
     for case in GOLDEN:
         assert case.get("why"), case["id"]
+        assert case.get("group"), case["id"]
         assert ("error" in case) != ("expected" in case), case["id"]
         # A known issue records accepted-but-wrong output and must say what is wrong.
         assert case.get("known_issue", "x"), case["id"]
