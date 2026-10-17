@@ -269,6 +269,25 @@ def test_ready_503_when_upstream_route_fails(client, upstream, failing):
     assert_error(client.get("/ready"), 503, "upstream_unavailable")
 
 
+@pytest.mark.parametrize(
+    ("method", "path", "status", "type_"),
+    [
+        ("GET", "/v1/unknown", 404, "not_found"),
+        ("POST", "/v1/audio/unknown", 404, "not_found"),
+        ("GET", SPEECH, 405, "method_not_allowed"),
+        ("POST", "/v1/models", 405, "method_not_allowed"),
+    ],
+)
+def test_routing_errors_use_audio_cpp_error_shape(client, upstream, method, path, status, type_):
+    response = client.request(method, path)
+
+    assert_error(response, status, type_)
+    assert set(response.json()) == {"error"}
+    assert upstream.requests == []
+    if status == 405:
+        assert response.headers["allow"]
+
+
 # --- auth --------------------------------------------------------------------
 
 PROTECTED = [("GET", "/v1/models"), ("GET", "/v1/audio/voices"), ("POST", SPEECH)]

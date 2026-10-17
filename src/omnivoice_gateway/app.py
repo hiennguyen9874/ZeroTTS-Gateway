@@ -10,6 +10,7 @@ from contextlib import asynccontextmanager
 import httpx
 from fastapi import Depends, FastAPI, Header, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from . import text as pipeline
 from .config import ModelDefaults, Settings
@@ -17,6 +18,12 @@ from .config import ModelDefaults, Settings
 log = logging.getLogger("omnivoice_gateway")
 
 READY_TIMEOUT_S = 5.0
+
+# Routing errors raised by the framework, mapped to audio.cpp-style types ("not_found" as upstream).
+HTTP_ERRORS = {
+    404: ("not_found", "route not found"),
+    405: ("method_not_allowed", "method not allowed for this route"),
+}
 
 
 class GatewayError(Exception):
@@ -127,6 +134,14 @@ def create_app(settings: Settings, transport: httpx.AsyncBaseTransport | None = 
     @app.exception_handler(GatewayError)
     async def handle_gateway_error(_request: Request, exc: GatewayError):
         return error_response(exc.status, exc.type, exc.message)
+
+    @app.exception_handler(StarletteHTTPException)
+    async def handle_http_error(_request: Request, exc: StarletteHTTPException):
+        # Routing errors (unknown route, wrong method) use audio.cpp's error shape too.
+        type_, message = HTTP_ERRORS.get(exc.status_code, ("invalid_request", "invalid request"))
+        response = error_response(exc.status_code, type_, message)
+        response.headers.update(exc.headers or {})
+        return response
 
     app.add_middleware(RequestLog)
 
