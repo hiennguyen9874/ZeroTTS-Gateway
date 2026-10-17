@@ -49,7 +49,7 @@ curl -s localhost:8000/v1/text/normalize -H 'Content-Type: application/json' \
 
 ## Chọn model và giọng
 
-Mặc định nên dùng `g-omnivoice` + `vieneu_v3_Kim_Thanh`; đoạn dài cần phát sớm dùng `g-omnivoice-stream`. Lý do và giới hạn: [docs/MODEL_VOICE_RECOMMENDATIONS.md](docs/MODEL_VOICE_RECOMMENDATIONS.md).
+Mặc định nên dùng `g-omnivoice` + `vieneu_v3_Kim_Thanh`; đây cũng là model duy nhất trong `configs/server.json`. Đoạn dài cần phát sớm dùng `g-omnivoice-stream`; entry này và các model khác (`omnivoice-vietnamese`, `omnivoice`) cần thêm lại vào config theo [docs/USAGE.md, mục 4.1.1](docs/USAGE.md#411-thêm-lại-các-model-đã-bỏ). Lý do và giới hạn: [docs/MODEL_VOICE_RECOMMENDATIONS.md](docs/MODEL_VOICE_RECOMMENDATIONS.md).
 
 ## Tài liệu
 
