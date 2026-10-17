@@ -18,7 +18,7 @@ from sea_g2p import Normalizer
 
 # Bump whenever a rule changes so a mis-reading can be traced to the version that produced it.
 # The pipeline version also carries a hash of the lexicon (see Pipeline.version).
-RULES_VERSION = "5"
+RULES_VERSION = "6"
 
 LEXICON_FIELDS = ("word", "replacement", "note")
 
@@ -259,15 +259,33 @@ class Pipeline:
             raise TextError("empty_text")
         return text, warnings
 
+    def _apply_lexicon(self, text: str) -> str:
+        # Reserve all literal matches first: even a separate numeric entry must win over a
+        # reading rule. Keep the original name's version context before replacing it with
+        # spoken Vietnamese ("iOS 18.2" -> "ai ô ét mười tám chấm hai", not "phẩy").
+        matches = list(self._lexicon_re.finditer(text))
+        out = []
+        end = 0
+        for i, match in enumerate(matches):
+            out.extend((text[end : match.start()], self._lexicon[match.group()]))
+            end = match.end()
+            version = _NAME_VERSION.match(text, match.start())
+            next_start = matches[i + 1].start() if i + 1 < len(matches) else len(text)
+            if version and version.end(1) == end and version.end() <= next_start:
+                # Reuse the version rule, including its thousands exception; a literal entry
+                # for the whole form ("GPT-3.5") does not take this branch.
+                out.append(_name_version(version)[len(match.group()) :])
+                end = version.end()
+        out.append(text[end:])
+        return "".join(out)
+
     def _vietnamese(self, text: str) -> str:
         # sea-g2p deletes tags ("[laughter]" -> "laughter,") and reads CMU phones as letters, so
         # protected spans are held out and only the text between them is normalized.
         parts = _PROTECTED.split(text)
         segments = [part.replace("[", " ").replace("]", " ") for part in parts[::2]]
         if self._lexicon_re:
-            segments = [
-                self._lexicon_re.sub(lambda m: self._lexicon[m.group()], seg) for seg in segments
-            ]
+            segments = [self._apply_lexicon(seg) for seg in segments]
         # After the lexicon, so an entry for a written form ("GPT-3.5") wins over the rule.
         segments = [_reading_rules(seg) for seg in segments]
         # sea-g2p drops a comma that starts its input, so punctuation right after a tag stays out.

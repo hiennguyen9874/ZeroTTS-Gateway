@@ -16,6 +16,7 @@ Lý do: một số lỗi của sea-g2p phá ranh giới câu mà ADR 0001 dựa 
 - Thứ tự text pipeline trong spec #1 có thêm một bước: từ điển phát âm, rồi reading rule, rồi sea-g2p.
 - Output của reading rule phải đi qua sea-g2p mà không bị đổi, giống ràng buộc với từ điển phát âm. Mỗi luật có golden kèm `why`, và golden kiểm cả câu đi qua sea-g2p.
 - Mỗi dạng viết chỉ có một luật sở hữu. Ví dụ `3.5` đọc "phẩy" nhưng `v2.0` và `GPT-3.5` thuộc luật phiên bản và đọc "chấm". Luật nào chồng lên luật khác thì phải có ca golden chứng minh thứ tự.
+- Khi mục từ điển thay tên gốc bằng dạng nói (ví dụ `iOS` → `ai ô ét`), phải giữ ngữ cảnh của tên gốc cho hậu tố phiên bản (`18.2` vẫn đọc “mười tám chấm hai”). Dành quyền ưu tiên cho mọi mục từ điển khớp nguyên văn trước; chỉ hậu tố không chồng lên mục khác mới được giao cho cùng luật phiên bản. Mục đầy đủ `GPT-3.5` hoặc mục riêng `18.2` vẫn thắng. Không đổi thứ tự ưu tiên từ điển/reading rule (#17).
 - Reading rule không phát text warning. Text warning vẫn chỉ báo phần input bị bỏ hoặc gỡ.
 - Nâng version sea-g2p thì phải chạy lại golden. Luật nào sea-g2p đã tự sửa đúng thì xoá đi.
 - Đổi luật thì phải tăng `RULES_VERSION`, để pipeline version truy được lỗi đọc sai.

@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from omnivoice_gateway.config import ModelDefaults, Settings
+from omnivoice_gateway.config import ModelDefaults, Settings, load_settings
 
 from .conftest import UPSTREAM_URL
 from .test_gateway import assert_error
@@ -36,9 +36,17 @@ def test_golden_cases_are_well_formed():
         assert case.get("known_issue", "x"), case["id"]
 
 
+@pytest.fixture
+def configured_client(make_client):
+    # Exercise the shipped config/lexicon, not an empty in-memory lexicon.
+    return make_client(
+        load_settings(Path(__file__).resolve().parents[1] / "configs" / "gateway.toml", env={})
+    )
+
+
 @pytest.mark.parametrize("case", GOLDEN, ids=lambda case: case["id"])
-def test_golden(client, upstream, case):
-    response = client.post(NORMALIZE, json=golden_request(case))
+def test_golden(configured_client, upstream, case):
+    response = configured_client.post(NORMALIZE, json=golden_request(case))
 
     if "error" in case:
         assert_error(response, 400, case["error"])
@@ -137,6 +145,48 @@ def test_normalize_requires_auth_when_key_set(make_client):
 # --- pronunciation lexicon --------------------------------------------------
 
 
+def test_default_lexicon_forwards_input_and_reference_text(configured_client, upstream):
+    body = {
+        "model": "g-omnivoice",
+        "input": "Mua iPhone 15.",
+        "reference_text": "Tôi dùng iPad và Google.",
+        "instructions": "Speak naturally.",
+        "seed": 42,
+        "speed": 1.0,
+    }
+    normalized = configured_client.post(NORMALIZE, json=body).json()
+
+    response = configured_client.post(SPEECH, json=body)
+
+    assert response.status_code == 200
+    assert len(upstream.calls("POST", SPEECH)) == 1
+    assert upstream.last_json() == {
+        **body,
+        "input": "mua ai phôn mười lăm.",
+        "reference_text": "tôi dùng ai pát và gu gồ.",
+    }
+    assert response.headers["x-text-pipeline-version"] == normalized["pipeline_version"]
+    assert "x-text-warnings" not in response.headers
+
+
+def test_default_lexicon_changes_pipeline_version(configured_client, client):
+    body = {"input": "Xin chào.", "language": "vi"}
+    configured = configured_client.post(NORMALIZE, json=body).json()
+    empty = client.post(NORMALIZE, json=body).json()
+
+    assert configured["engine_text"] == empty["engine_text"]
+    assert configured["pipeline_version"] != empty["pipeline_version"]
+
+
+def test_default_lexicon_keeps_case_sensitive_whole_word_matching(configured_client, client):
+    # None of these is an exact, case-sensitive lexicon key.
+    text = "iphone, IPHONE, iPhoneX, MyGoogleApp và facebooker."
+    assert dry_run(configured_client, text) == {
+        **dry_run(client, text),
+        "pipeline_version": dry_run(configured_client, "x")["pipeline_version"],
+    }
+
+
 @pytest.fixture
 def lexicon_client(make_client, tmp_path):
     def make(rows: str) -> object:
@@ -187,9 +237,32 @@ def test_lexicon_runs_before_normalizer_and_never_inside_tags(lexicon_client):
     assert result["engine_text"] == "mua ai phôn ở sài gòn [laughter] nhé."
 
 
+@pytest.mark.parametrize(
+    ("rows", "text", "expected"),
+    [
+        ("iOS,ai ô ét,brand\n", "iOS 18.2.", "ai ô ét mười tám chấm hai."),
+        ("iOS,ai ô ét,brand\n", "iOS-18.2.1.", "ai ô ét mười tám chấm hai chấm một."),
+        ("GPT,gờ pê tê,brand\n", "GPT-3.5.", "gờ pê tê ba chấm năm."),
+        ("Python,trăn,brand\n", "Python 3.12.", "trăn ba chấm mười hai."),
+        (
+            "USD,đô la,currency\n",
+            "USD 1.000.000.",
+            "đô la một chấm không không không chấm không không không.",
+        ),
+        (
+            "iOS,ai ô ét,brand\n18.2,bản mới,custom version\n",
+            "iOS 18.2.",
+            "ai ô ét bản mới.",
+        ),
+    ],
+)
+def test_lexicon_preserves_version_context(lexicon_client, rows, text, expected):
+    assert dry_run(lexicon_client(rows), text)["engine_text"] == expected
+
+
 def test_lexicon_wins_over_reading_rule(lexicon_client):
     # Without the entry the version rule reads "GPT ba chấm năm" (golden vi-version-mixed).
-    client = lexicon_client("GPT-3.5,gờ pê tê ba rưỡi,product name\n")
+    client = lexicon_client("GPT,gờ pê tê,brand\nGPT-3.5,gờ pê tê ba rưỡi,product name\n")
 
     assert (
         dry_run(client, "Dùng GPT-3.5 và Python 3.12.")["engine_text"]

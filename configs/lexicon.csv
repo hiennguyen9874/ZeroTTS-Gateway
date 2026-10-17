@@ -1,1 +1,7 @@
 word,replacement,note
+iPhone,ai phôn,Tên điện thoại Apple; tránh sea-g2p tách thành i phone (#17).
+iPad,ai pát,Tên máy tính bảng Apple; cách đọc ứng viên từ lượt #7 (#17).
+iOS,ai ô ét,Tên hệ điều hành Apple; ngoại lệ tên sản phẩm không đổi chính sách AI/API (#17).
+YouTube,du túp,Tên nền tảng video; cách đọc ứng viên từ lượt #7 (#17).
+Facebook,phây búc,Tên mạng xã hội; cách đọc ứng viên từ lượt #7 (#17).
+Google,gu gồ,Tên thương hiệu tìm kiếm; cách đọc ứng viên từ lượt #7 (#17).

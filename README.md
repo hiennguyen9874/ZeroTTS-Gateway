@@ -53,6 +53,10 @@ iPhone,ai phôn,thương hiệu
 
 Khớp theo ranh giới từ, mục dài trước, phân biệt hoa thường; chạy trước sea-g2p nên `replacement` phải là dạng nói tiếng Việt. Nạp lúc khởi động (sửa thì restart); file sai định dạng làm gateway không khởi động. Hash của từ điển nằm trong `X-Text-Pipeline-Version` (`<RULES_VERSION>-<hash>`).
 
+Bản mặc định gồm sáu ngoại lệ tên sản phẩm: `iPhone` → `ai phôn`, `iPad` → `ai pát`, `iOS` → `ai ô ét`, `YouTube` → `du túp`, `Facebook` → `phây búc`, `Google` → `gu gồ`; mỗi mục có `note`. Đây là cách đọc ứng viên từ #7 được triển khai giới hạn trong #17, **chưa có xác nhận nghe bằng tai người** ([thiết kế và kết quả](docs/reports/issue17-lexicon.md)). Không đổi cách đọc `AI`/`API` hay Việt hoá mọi từ tiếng Anh. Chỉ áp khi effective language là tiếng Việt và normalize bật; các biến thể như `iphone`, `IPHONE`, `iPhoneX` không khớp. Dùng config repo để nạp từ điển; `Settings()` không tự nạp file, và file riêng của operator thay thế chứ không gộp với bản repo.
+
+Tên sản phẩm trước phiên bản vẫn giữ luật đọc “chấm”: `iOS 18.2` → `ai ô ét mười tám chấm hai`. Gateway dành quyền ưu tiên cho mọi mục từ điển khớp nguyên văn trước, rồi dùng ngữ cảnh tên gốc cho hậu tố phiên bản chưa bị mục khác ghi đè; không đưa reading rule lên trước từ điển.
+
 ### Thêm ca regression
 
 Ca golden nằm ở `tests/golden/pipeline.json`, chạy qua route dry-run. Mỗi khi sửa một lỗi đọc sai:
@@ -99,7 +103,7 @@ uv run python scripts/render_samples.py --set listening --question 3 --out outpu
 uv run python scripts/render_samples.py --set listening --question 3 --model g-omnivoice-stream --out outputs/listen-q3-stream
 ```
 
-Ca nghe có thể đặt `speed` để giữ cùng tốc độ ở cả hai phía; CSV ghi `requested_speed` (trống khi không chỉ định, không phải tốc độ hiệu lực do gateway thêm). Hai ca `tag-case-upper/lower` tắt normalize và giữ cùng dấu câu, `speed=1.0`, để tách ảnh hưởng của chữ hoa khỏi các bước khác. Nhóm `loanwords` chỉ là cách đọc ứng viên cho #17, chưa phải từ điển mặc định. Không dùng `--normalize-on` khi so sánh hai ca chữ hoa/thường này.
+Ca nghe có thể đặt `speed` để giữ cùng tốc độ ở cả hai phía; CSV ghi `requested_speed` (trống khi không chỉ định, không phải tốc độ hiệu lực do gateway thêm). Hai ca `tag-case-upper/lower` tắt normalize và giữ cùng dấu câu, `speed=1.0`, để tách ảnh hưởng của chữ hoa khỏi các bước khác. Nhóm `loanwords` giữ các dạng nói dùng làm đối chứng cho sáu mục từ điển mặc định #17; golden kiểm tên sản phẩm nguyên văn. Các cách đọc này vẫn cần người nghe xác nhận. Không dùng `--normalize-on` khi so sánh hai ca chữ hoa/thường này.
 
 Ca clone (`"clone": "<voice>"`) gửi `voices/<voice>.wav` dạng base64 trong `voice_ref` (không gửi `voice`), `reference_text` lấy từ dòng `<voice>|…` của `voices/prompt_text`. Phía A (gateway) gửi `reference_text` nguyên văn để gateway chuẩn hoá; phía B (direct) gửi `reference_text` **nguyên văn** và lấy engine text của gateway làm `input`, nên hai phía cùng input, seed, model và chỉ khác `reference_text`. Script đặt `speed=1.0` cho cả hai phía (hoặc `speed` của ca nếu có), không để speed band của gateway làm sai đối chứng. Bộ câu có audio tham chiếu Mai_Anh, Doan_Trang và Ngoc_Linh. Cột `reference_text` trong `results.csv` ghi `normalized`/`verbatim`; trang HTML hiện văn bản tham chiếu của từng phía.
 

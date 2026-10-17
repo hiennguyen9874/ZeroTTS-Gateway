@@ -1,5 +1,8 @@
 # Lượt nghe lại #7 sau các sửa lỗi pipeline
 
+Cập nhật tiếp theo: [#17 — từ điển mặc định và render lại hai giọng](issue17-lexicon.md).
+Báo cáo dưới đây là lịch sử trước #17; không suy ra sáu ứng viên đã được người nghe chốt.
+
 ## Phạm vi và cách đọc kết quả
 
 Lượt ngày 17/10/2026 thay toàn bộ output cũ theo yêu cầu operator. Không còn WAV
