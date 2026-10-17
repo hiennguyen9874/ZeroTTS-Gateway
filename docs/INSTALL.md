@@ -27,14 +27,15 @@ nvidia-smi
 
 ## 2. Lấy source
 
+`references/audio.cpp` là git submodule, đã pin ở commit `65df584a`:
+
 ```bash
-cd references
-git clone git@github.com:0xShug0/audio.cpp.git   # bỏ qua nếu đã có
-cd audio.cpp
-git submodule update --init --recursive
+git submodule update --init references/audio.cpp
+# Chỉ cần khi dùng WebUI (submodule lồng, URL SSH):
+git -C references/audio.cpp submodule update --init --recursive
 ```
 
-Bản đang dùng là commit `65df584a`.
+Đổi bản audio.cpp: checkout commit mới trong `references/audio.cpp`, chạy lại test của gateway, rồi commit thay đổi submodule.
 
 ## 3. Build
 

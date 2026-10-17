@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Run render_samples.py for every (case set, model, voice) and build one summary.
 
-Needs audio.cpp and the gateway running (see README). Defaults: both case sets, every TTS model in
-the gateway's /v1/models, every voices/*.wav that has a line in voices/prompt_text.
+Needs audio.cpp and the gateway running (see docs/LISTENING.md). Defaults: both case sets, every
+TTS model in the gateway's /v1/models, every voices/*.wav that has a line in voices/prompt_text.
 
   uv run python scripts/render_all.py                                  # everything
   uv run python scripts/render_all.py --set listening --model g-omnivoice --voice vieneu_v3_Mai_Anh

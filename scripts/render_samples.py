@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Render cases for a listening run: gateway (A) vs audio.cpp direct (B), with metrics.
 
-Needs a running audio.cpp server and a gateway in front of it (see README, docs/USAGE.md):
+Needs a running audio.cpp server and a gateway in front of it (docs/LISTENING.md, docs/USAGE.md):
 
   uv run python scripts/render_samples.py --out outputs/listen-001
   uv run python scripts/render_samples.py --model g-omnivoice-stream --group numbers-money

@@ -1,0 +1,18 @@
+[submodule "references/audio.cpp"]
+	path = references/audio.cpp
+	url = https://github.com/0xShug0/audio.cpp.git
+[submodule "references/sea-g2p"]
+	path = references/sea-g2p
+	url = https://github.com/pnnbao97/sea-g2p.git
+[submodule "references/OmniVoice"]
+	path = references/OmniVoice
+	url = https://github.com/k2-fsa/OmniVoice.git
+[submodule "references/VieNeu-TTS"]
+	path = references/VieNeu-TTS
+	url = https://github.com/pnnbao97/VieNeu-TTS.git
+[submodule "references/gipformer"]
+	path = references/gipformer
+	url = https://github.com/ggroup-ai-lab/gipformer.git
+[submodule "references/vietnormalizer"]
+	path = references/vietnormalizer
+	url = https://github.com/nghimestudio/vietnormalizer.git

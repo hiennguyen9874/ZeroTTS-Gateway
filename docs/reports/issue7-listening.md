@@ -182,7 +182,7 @@ trước khi đổi pipeline.
 
 ## Tái lập
 
-Cần khởi động upstream, gateway và ASR theo README. Chạy tuần tự trên một GPU cũng
+Cần khởi động upstream, gateway và ASR theo [LISTENING.md](../LISTENING.md#chấm-bằng-asr-tuỳ-chọn). Chạy tuần tự trên một GPU cũng
 cho cùng kế hoạch model/giọng/seed; song song chỉ để giảm thời gian chờ.
 
 ```bash

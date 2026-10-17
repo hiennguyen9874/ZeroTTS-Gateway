@@ -14,12 +14,16 @@ A thin **gateway** in front of audio.cpp (the **upstream**) running OmniVoice. I
 - Docs, ADRs, and issues are written in Vietnamese; code and code comments in English.
 - Tests have one seam: the gateway's HTTP API, with a fake upstream injected via `httpx` transport (`create_app(settings, transport=...)`). Test only observable behaviour (status, body, headers, what the fake upstream received). Pipeline goldens go through `POST /v1/text/normalize`; each case carries a `why`, and known-wrong outputs stay as marked known issues. Every mis-reading fix adds a golden.
 - Error bodies use audio.cpp's shape `{"error":{"message","type"}}`; `message` never contains request text. Logs never contain text or audio.
-- `references/`, `models/`, `voices_candidates/` are gitignored local clones/artifacts: read them, never edit them.
+- `references/` holds read-only clones: never edit them. `audio.cpp`, `sea-g2p`, `OmniVoice`, `VieNeu-TTS`, `gipformer`, `vietnormalizer` are git submodules pinned to the commits the gateway was built against (`git submodule update --init`); bump a pin only on purpose, in its own commit. Other entries (HF model repos, `llm-wiki`, …) stay gitignored local clones. `models/` and `voices_candidates/` are gitignored local artifacts.
 
 ## Local runtime docs
 
 - `docs/INSTALL.md`: building audio.cpp with CUDA 12.6 on A100.
 - `docs/USAGE.md`: converting OmniVoice checkpoints to GGUF, CLI/server usage, voice clone/design, model table.
+- `docs/GATEWAY.md`: running the gateway, env vars, routes, config, Docker.
+- `docs/TEXT_PIPELINE.md`: text pipeline behaviour, pronunciation lexicon, adding golden cases.
+- `docs/LISTENING.md`: `render_samples.py`/`render_all.py` listening runs, ASR scoring, output format.
+- `docs/MODEL_VOICE_RECOMMENDATIONS.md`: model/voice evaluation and recommended defaults.
 - `configs/server.json` is the audio.cpp server config (model ids, `mode: streaming` entry); `configs/gateway.toml` is the gateway's per-model defaults.
 - `scripts/sample_voices.py`: samples Vietnamese HF datasets into `voices_candidates/` and installs picked voices into `voices/`.
 
@@ -46,7 +50,7 @@ All under `references/` unless a URL.
 ### ASR for listening runs
 
 - `gipformer`: g-group-ai-lab's Vietnamese ASR code; `infer_onnx.py` shows the sherpa-onnx transducer setup that `scripts/asr_server.py` mirrors.
-- `gipformer1.5-68M-rnnt`: the model card and config only (ONNX files are Git LFS pointers); download the files into `models/gipformer1.5-68M-rnnt` (README, "Chấm bằng ASR").
+- `gipformer1.5-68M-rnnt`: the model card and config only (ONNX files are Git LFS pointers); download the files into `models/gipformer1.5-68M-rnnt` (`docs/LISTENING.md`, "Chấm bằng ASR").
 
 ### Vietnamese text processing
 
