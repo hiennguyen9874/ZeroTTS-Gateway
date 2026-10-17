@@ -187,6 +187,16 @@ def test_lexicon_runs_before_normalizer_and_never_inside_tags(lexicon_client):
     assert result["engine_text"] == "mua ai phôn ở sài gòn [laughter] nhé."
 
 
+def test_lexicon_wins_over_reading_rule(lexicon_client):
+    # Without the entry the version rule reads "GPT ba chấm năm" (golden vi-version-mixed).
+    client = lexicon_client("GPT-3.5,gờ pê tê ba rưỡi,product name\n")
+
+    assert (
+        dry_run(client, "Dùng GPT-3.5 và Python 3.12.")["engine_text"]
+        == "dùng gờ pê tê ba rưỡi và python ba chấm mười hai."
+    )
+
+
 @pytest.mark.parametrize(
     ("body", "expected"),
     [({"language": "en"}, "AI."), ({"text_processing": {"normalize": False}}, "AI.")],
