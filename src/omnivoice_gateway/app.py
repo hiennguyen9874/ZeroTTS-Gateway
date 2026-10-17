@@ -294,15 +294,32 @@ def create_app(settings: Settings, transport: httpx.AsyncBaseTransport | None = 
         so caller generation parameters still pass through untouched.
         """
         defaults = settings.models.get(body.get("model")) or ModelDefaults()
-        if defaults.short_text_speed is None or "speed" in body:
+        if "speed" in body or (
+            defaults.short_text_speed is None and not defaults.short_text_speed_bands
+        ):
             return
         options = body.get("options")
         if isinstance(options, dict) and ("duration_sec" in options or "duration" in options):
             return
-        if pipeline.count_syllables(body["input"]) > defaults.short_text_max_syllables:
-            return
-        body["speed"] = defaults.short_text_speed
-        request.state.log["short_text_speed"] = defaults.short_text_speed
+        syllables = pipeline.count_syllables(body["input"])
+        if defaults.short_text_speed_bands:
+            speed = next(
+                (
+                    band.speed
+                    for band in defaults.short_text_speed_bands
+                    if syllables <= band.max_syllables
+                ),
+                None,
+            )
+        else:
+            speed = (
+                defaults.short_text_speed
+                if syllables <= defaults.short_text_max_syllables
+                else None
+            )
+        if speed is not None:
+            body["speed"] = speed
+            request.state.log["short_text_speed"] = speed
 
     @app.post("/v1/text/normalize", dependencies=[Depends(require_auth)])
     async def normalize(request: Request):

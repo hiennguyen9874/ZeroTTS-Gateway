@@ -16,17 +16,20 @@ lexicon_path = "lexicon.csv"
 
 # Per-model defaults; model ids not listed here are still forwarded.
 #
-# short_text_speed (off unless set, ADR 0004): `speed` the gateway sends when the caller sends
-# neither `speed` nor `options.duration_sec` and the engine text has at most
-# short_text_max_syllables (default 12) syllables. audio.cpp gives short text too little time and
-# some voices then drop its first phrase; 0.7 brought the short cases of issue #18 to full recall.
+# short_text_speed_bands (off unless set, ADR 0004): ascending inclusive syllable bounds.
+# Use the first matching band; above the last bound no speed is added. Caller `speed` and
+# options.duration_sec/duration always win. Count engine text, excluding non-verbal tags.
+# Keep 0.7 up to 8 syllables (#18); 0.6 covers the remaining 9-syllable greeting (#19) without
+# further slowing the shortest lists. Measurements/limitations: docs/adr/0004-short-text-speed.md.
+# Alternative: short_text_speed = 0.7 with short_text_max_syllables = 12 (scalar form, unchanged).
+# Do not combine the scalar and band forms.
 [models.g-omnivoice]
 language = "vi"
-short_text_speed = 0.7
+short_text_speed_bands = [{ max_syllables = 8, speed = 0.7 }, { max_syllables = 12, speed = 0.6 }]
 
 [models.g-omnivoice-stream]
 language = "vi"
-short_text_speed = 0.7
+short_text_speed_bands = [{ max_syllables = 8, speed = 0.7 }, { max_syllables = 12, speed = 0.6 }]
 
 [models.omnivoice-vietnamese]
 language = "vi"

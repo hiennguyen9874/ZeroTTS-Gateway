@@ -1,5 +1,6 @@
 """Gateway configuration: a TOML file plus environment overrides."""
 
+import math
 import os
 import tomllib
 from collections.abc import Mapping
@@ -13,6 +14,25 @@ ENV_HOST = "OMNIVOICE_GATEWAY_HOST"
 
 
 @dataclass(frozen=True)
+class ShortTextSpeedBand:
+    """Inclusive upper syllable bound and operator-selected speed (ADR 0004)."""
+
+    max_syllables: int
+    speed: float
+
+    def __post_init__(self):
+        if type(self.max_syllables) is not int or self.max_syllables < 1:
+            raise ValueError("band max_syllables must be a positive integer")
+        if (
+            isinstance(self.speed, bool)
+            or not isinstance(self.speed, (int, float))
+            or not math.isfinite(self.speed)
+            or self.speed <= 0
+        ):
+            raise ValueError("band speed must be a finite positive number")
+
+
+@dataclass(frozen=True)
 class ModelDefaults:
     language: str | None = None
     normalize: bool = True
@@ -21,8 +41,16 @@ class ModelDefaults:
     # short text too little time, so some voices drop its first phrase (issue #18).
     short_text_speed: float | None = None
     short_text_max_syllables: int = 12
+    # Alternative to the scalar speed: ascending inclusive bounds, no speed above the last band.
+    short_text_speed_bands: tuple[ShortTextSpeedBand, ...] = ()
 
     def __post_init__(self):
+        if self.short_text_speed_bands:
+            if self.short_text_speed is not None:
+                raise ValueError("choose short_text_speed or short_text_speed_bands, not both")
+            bounds = [band.max_syllables for band in self.short_text_speed_bands]
+            if any(a >= b for a, b in zip(bounds, bounds[1:], strict=False)):
+                raise ValueError("short_text_speed_bands must have strictly increasing bounds")
         if self.short_text_speed is not None and not self.short_text_speed > 0:
             raise ValueError("short_text_speed must be a positive number")
         if self.short_text_max_syllables < 1:
@@ -53,9 +81,12 @@ def load_settings(path: str | Path | None = None, env: Mapping[str, str] = os.en
             data = tomllib.load(f)
     if data.get("lexicon_path"):
         data["lexicon_path"] = str(Path(path).parent / data["lexicon_path"])
-    models = {
-        model_id: ModelDefaults(**values) for model_id, values in data.pop("models", {}).items()
-    }
+    models = {}
+    for model_id, values in data.pop("models", {}).items():
+        bands = tuple(
+            ShortTextSpeedBand(**band) for band in values.pop("short_text_speed_bands", [])
+        )
+        models[model_id] = ModelDefaults(**values, short_text_speed_bands=bands)
     if env.get(ENV_UPSTREAM_URL):
         data["upstream_url"] = env[ENV_UPSTREAM_URL]
     if env.get(ENV_HOST):

@@ -424,6 +424,141 @@ def test_short_text_speed_is_logged_without_text(make_client, upstream, caplog):
     assert "Bí mật" not in caplog.text + json.dumps(fields, ensure_ascii=False)
 
 
+@pytest.mark.parametrize("model", ["g-omnivoice", "g-omnivoice-stream"])
+@pytest.mark.parametrize(
+    ("text", "speed"),
+    [
+        ("Xin chào.", 0.7),
+        ("Cần mang, Áo mưa, Đèn pin, Nước uống.", 0.7),  # 8 syllables
+        ("Xin chào, hôm nay chúng ta học bài mới.", 0.6),  # 9 syllables, issue #19
+        ("Xin chào, hôm nay chúng ta cùng nhau học một bài mới.", 0.6),  # 12
+        ("Xin chào, hôm nay chúng ta sẽ cùng nhau học một bài mới.", None),  # 13
+    ],
+)
+def test_shipped_speed_bands(make_client, upstream, model, text, speed):
+    client = make_client(load_settings("configs/gateway.toml", env={}))
+    body = speech_body(model=model, input=text, text_processing={"normalize": False})
+
+    response = client.post(SPEECH, json=body)
+
+    assert response.status_code == 200
+    sent = upstream.last_json()
+    assert sent.get("speed") == speed
+    assert ("speed" in sent) == (speed is not None)
+    assert sent["input"] == text  # No text workaround or extra request.
+    assert len(upstream.requests) == 1
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        {"speed": 1.0},
+        {"speed": 0.8, "options": {"num_inference_steps": 64}},
+        {"speed": None},
+        {"options": {"duration_sec": None}},
+        {"options": {"duration_sec": 4}},
+        {"options": {"duration": 4}},
+    ],
+)
+def test_speed_bands_preserve_caller_parameters(make_client, upstream, extra):
+    client = make_client(load_settings("configs/gateway.toml", env={}))
+
+    response = client.post(
+        SPEECH, json=speech_body(input="Xin chào, hôm nay chúng ta học bài mới.", **extra)
+    )
+
+    assert response.status_code == 200
+    sent = upstream.last_json()
+    assert sent.get("speed") == extra.get("speed")
+    assert sent.get("options") == extra.get("options")
+
+
+def test_speed_bands_count_engine_text_and_log_selected_speed(
+    make_client, upstream, tmp_path, caplog
+):
+    config = tmp_path / "gateway.toml"
+    config.write_text(
+        '[models.g-omnivoice]\nlanguage = "vi"\nshort_text_max_syllables = 2\n'
+        "short_text_speed_bands = ["
+        "{max_syllables = 4, speed = 0.75}, {max_syllables = 5, speed = 0.65}]\n"
+    )
+    client = make_client(load_settings(config, env={}))
+    caplog.set_level(logging.INFO, logger="omnivoice_gateway")
+
+    # Input is three words, engine text is five syllables; tags do not count.
+    response = client.post(SPEECH, json=speech_body(input="[laughter] Có 41 người. [sigh]"))
+
+    assert response.status_code == 200
+    assert upstream.last_json()["speed"] == 0.65
+    fields = [r for r in caplog.records if r.name == "omnivoice_gateway"][-1].fields
+    assert fields["short_text_speed"] == 0.65
+    assert "Có 41" not in caplog.text + json.dumps(fields, ensure_ascii=False)
+
+    # Bands, not the scalar threshold, also define where the option stops applying.
+    client.post(SPEECH, json=speech_body(input="Xin chào tất cả các bạn."))
+    assert "speed" not in upstream.last_json()
+
+
+@pytest.mark.parametrize("model", ["omnivoice", "omnivoice-vietnamese", "unknown-model"])
+def test_shipped_speed_bands_do_not_affect_other_models(make_client, upstream, model):
+    client = make_client(load_settings("configs/gateway.toml", env={}))
+
+    response = client.post(
+        SPEECH, json=speech_body(model=model, input="Xin chào, hôm nay chúng ta học bài mới.")
+    )
+
+    assert response.status_code == 200
+    assert "speed" not in upstream.last_json()
+
+
+@pytest.mark.parametrize(
+    "bands",
+    [
+        "[{max_syllables = 0, speed = 0.7}]",
+        "[{max_syllables = 2.5, speed = 0.7}]",
+        "[{max_syllables = true, speed = 0.7}]",
+        "[{max_syllables = 8, speed = true}]",
+        '[{max_syllables = 8, speed = "slow"}]',
+        "[{max_syllables = 8, speed = 0}]",
+        "[{max_syllables = 8, speed = -0.6}]",
+        "[{max_syllables = 8, speed = inf}]",
+        "[{max_syllables = 8, speed = nan}]",
+        "[{max_syllables = 12, speed = 0.7}, {max_syllables = 8, speed = 0.6}]",
+        "[{max_syllables = 8, speed = 0.7}, {max_syllables = 8, speed = 0.6}]",
+    ],
+)
+def test_invalid_speed_bands_rejected(tmp_path, bands):
+    config = tmp_path / "gateway.toml"
+    config.write_text(f"[models.g-omnivoice]\nshort_text_speed_bands = {bands}\n")
+
+    with pytest.raises(ValueError):
+        load_settings(config, env={})
+
+
+@pytest.mark.parametrize("speed", [None, 0.75])
+def test_empty_speed_bands_are_disabled(make_client, upstream, tmp_path, speed):
+    config = tmp_path / "gateway.toml"
+    scalar = "" if speed is None else f"short_text_speed = {speed}\n"
+    config.write_text(f"[models.g-omnivoice]\nshort_text_speed_bands = []\n{scalar}")
+    client = make_client(load_settings(config, env={}))
+
+    response = client.post(SPEECH, json=speech_body(input="Xin chào."))
+
+    assert response.status_code == 200
+    assert upstream.last_json().get("speed") == speed
+
+
+def test_scalar_speed_and_bands_cannot_be_combined(tmp_path):
+    config = tmp_path / "gateway.toml"
+    config.write_text(
+        "[models.g-omnivoice]\nshort_text_speed = 0.7\n"
+        "short_text_speed_bands = [{max_syllables = 12, speed = 0.6}]\n"
+    )
+
+    with pytest.raises(ValueError):
+        load_settings(config, env={})
+
+
 # --- config ------------------------------------------------------------------
 
 
