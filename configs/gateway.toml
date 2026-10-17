@@ -15,7 +15,7 @@ max_input_chars = 5000
 lexicon_path = "lexicon.csv"
 
 # Per-model defaults; model ids not listed here are still forwarded.
-# configs/server.json ships only g-omnivoice; the other sections apply once their upstream entries
+# configs/server.json ships only g-omnivoice and g-omnivoice-stream; the other sections apply once their upstream entries
 # are added back (docs/USAGE.md, section 4.1.1).
 #
 # short_text_speed_bands (off unless set, ADR 0004): ascending inclusive syllable bounds.

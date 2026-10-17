@@ -20,6 +20,18 @@
         "num_inference_steps": 32,
         "guidance_scale": 2
       }
+    },
+    {
+      "id": "g-omnivoice-stream",
+      "family": "omnivoice",
+      "path": "../models/g-omnivoice-GGUF/g-omnivoice-f16.gguf",
+      "task": "tts",
+      "mode": "streaming",
+      "default_request_options": {
+        "language": "vi",
+        "text_chunk_size": 160,
+        "text_chunk_mode": "tag_aware"
+      }
     }
   ]
 }

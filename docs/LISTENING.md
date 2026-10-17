@@ -29,7 +29,7 @@ Ngoài golden (mặc định, `--set golden`), `--set listening` chạy bộ câ
 ```bash
 # Câu hỏi 1, 2, 4, 5 và ca khó, model offline
 uv run python scripts/render_samples.py --set listening --out outputs/listen-q-offline
-# Câu hỏi 3 ở cả hai model: offline và streaming (cần thêm entry g-omnivoice-stream, USAGE.md mục 4.1.1)
+# Câu hỏi 3 ở cả hai model: offline và streaming
 uv run python scripts/render_samples.py --set listening --question 3 --out outputs/listen-q3-offline
 uv run python scripts/render_samples.py --set listening --question 3 --model g-omnivoice-stream --out outputs/listen-q3-stream
 ```
@@ -68,7 +68,7 @@ Nhiều ca golden (nhóm `markup`, `short-sentences`, …) đặt `normalize: fa
 
 ## Chạy tất cả model × giọng
 
-`scripts/render_all.py` gọi `render_samples.py` cho mọi (bộ câu, model, giọng): mặc định cả `golden` lẫn `listening`, mọi model TTS trong `/v1/models` (config mặc định chỉ có `g-omnivoice`; muốn so nhiều model thì thêm entry theo [USAGE.md, mục 4.1.1](USAGE.md#411-thêm-lại-các-model-đã-bỏ)), mọi `voices/*.wav` có dòng trong `voices/prompt_text`.
+`scripts/render_all.py` gọi `render_samples.py` cho mọi (bộ câu, model, giọng): mặc định cả `golden` lẫn `listening`, mọi model TTS trong `/v1/models` (config mặc định chỉ có `g-omnivoice` và `g-omnivoice-stream`; muốn so nhiều model thì thêm entry theo [USAGE.md, mục 4.1.1](USAGE.md#411-thêm-lại-các-model-đã-bỏ)), mọi `voices/*.wav` có dòng trong `voices/prompt_text`.
 
 ```bash
 uv run python scripts/render_all.py --dry-run                      # xem kế hoạch

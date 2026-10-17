@@ -334,7 +334,7 @@ Server giữ model và session sống liên tục giữa các request, nên đâ
 
 ### 4.1. Config
 
-File mẫu nằm ở [`configs/server.json`](../configs/server.json) (đã chạy thử). Mặc định chỉ khai báo một model là `g-omnivoice` (offline). Các model khác (`g-omnivoice-stream`, `omnivoice-vietnamese`, `omnivoice`) đã bỏ khỏi config; muốn dùng lại thì xem [mục 4.1.1](#411-thêm-lại-các-model-đã-bỏ).
+File mẫu nằm ở [`configs/server.json`](../configs/server.json) (đã chạy thử). Mặc định chỉ khai báo G-OmniVoice ở hai chế độ: `g-omnivoice` (offline) và `g-omnivoice-stream` (streaming). Các model khác (`omnivoice-vietnamese`, `omnivoice`) đã bỏ khỏi config; muốn dùng lại thì xem [mục 4.1.1](#411-thêm-lại-các-model-đã-bỏ).
 
 ```json
 {
@@ -355,6 +355,14 @@ File mẫu nằm ở [`configs/server.json`](../configs/server.json) (đã chạ
       "task": "tts",
       "mode": "offline",
       "default_request_options": { "language": "vi", "num_inference_steps": 32, "guidance_scale": 2.0 }
+    },
+    {
+      "id": "g-omnivoice-stream",
+      "family": "omnivoice",
+      "path": "../models/g-omnivoice-GGUF/g-omnivoice-f16.gguf",
+      "task": "tts",
+      "mode": "streaming",
+      "default_request_options": { "language": "vi", "text_chunk_size": 160, "text_chunk_mode": "tag_aware" }
     }
   ]
 }
@@ -364,7 +372,7 @@ Giải thích các trường:
 
 - `id`: tên model mà client gửi trong trường `model` của request. Đây không phải family hay tên file.
 - `path` và `voice_dir` tương đối: được tính so với **thư mục chứa file config**.
-- `mode`: `offline` hoặc `streaming`. Streaming chỉ chạy được trên entry có `mode: "streaming"`. Muốn dùng cả hai chế độ thì phải khai báo hai entry (ví dụ `g-omnivoice` và `g-omnivoice-stream` ở mục 4.1.1). Mỗi entry có session riêng và tốn VRAM riêng.
+- `mode`: `offline` hoặc `streaming`. Streaming chỉ chạy được trên entry có `mode: "streaming"`. Muốn dùng cả hai chế độ thì phải khai báo hai entry, như ví dụ trên. Mỗi entry có session riêng và tốn VRAM riêng.
 - `lazy_load: true`: chỉ load model khi có request đầu tiên tới model đó. Model đã load sẽ ở lại trong bộ nhớ, trừ khi bị evict vì vượt `max_loaded_models`, bị unload do `idle_unload_ms`, hoặc được gọi unload thủ công.
 - `max_loaded_models`: số model được nằm trong bộ nhớ cùng lúc. Khi vượt quá, server unload model idle ít dùng gần đây nhất. Mỗi model OmniVoice f16 cần khoảng vài GB VRAM.
 - `busy_timeout_ms`: thời gian tối đa một request chờ model đang bận. Quá thời gian này server trả HTTP 503 `server_busy`.
@@ -381,17 +389,9 @@ Nếu chạy từ safetensors, đặt `path` là thư mục model và thêm `ses
 
 #### 4.1.1. Thêm lại các model đã bỏ
 
-Config mặc định chỉ có `g-omnivoice`. Các entry dưới đây từng có trong `configs/server.json` và đã chạy thử (lượt nghe #7, [báo cáo](reports/issue7-listening.md)). Muốn dùng entry nào thì thêm object tương ứng vào mảng `"models"` của `configs/server.json`, rồi khởi động lại audio.cpp:
+Config mặc định chỉ có `g-omnivoice` và `g-omnivoice-stream`. Các entry dưới đây từng có trong `configs/server.json` và đã chạy thử (lượt nghe #7, [báo cáo](reports/issue7-listening.md)). Muốn dùng entry nào thì thêm object tương ứng vào mảng `"models"` của `configs/server.json`, rồi khởi động lại audio.cpp:
 
 ```json
-    {
-      "id": "g-omnivoice-stream",
-      "family": "omnivoice",
-      "path": "../models/g-omnivoice-GGUF/g-omnivoice-f16.gguf",
-      "task": "tts",
-      "mode": "streaming",
-      "default_request_options": { "language": "vi", "text_chunk_size": 160, "text_chunk_mode": "tag_aware" }
-    },
     {
       "id": "omnivoice-vietnamese",
       "family": "omnivoice",
@@ -411,7 +411,6 @@ Config mặc định chỉ có `g-omnivoice`. Các entry dưới đây từng c�
 
 | Entry | Dùng khi | Cần file |
 |---|---|---|
-| `g-omnivoice-stream` | Streaming (SSE hoặc PCM thô) đoạn dài cần phát sớm, mục 5.3 | Dùng chung GGUF với `g-omnivoice` nhưng có session và VRAM riêng |
 | `omnivoice-vietnamese` | Nghe A/B với một bản finetune tiếng Việt khác | `models/omnivoice-vietnamese-GGUF/omnivoice-vietnamese-f16.gguf` (convert ở mục 2; cần copy `audio_tokenizer/` từ bản gốc) |
 | `omnivoice` | OmniVoice gốc đa ngôn ngữ, đối chứng | `models/audio.cpp-gguf/OmniVoice-GGUF/omnivoice-f16.gguf` |
 
@@ -419,8 +418,9 @@ Lưu ý khi thêm lại:
 
 - Mỗi entry là một object trong mảng `"models"`, ngăn cách bằng dấu phẩy; JSON không cho dấu phẩy thừa sau phần tử cuối.
 - Với `lazy_load: true`, file GGUF chỉ được mở ở request đầu tiên tới model đó. Thiếu file thì request đó lỗi, nên kiểm tra đường dẫn trước (`ls models/...`) hoặc gọi thử một request.
-- `max_loaded_models: 2` đủ cho `g-omnivoice` + `g-omnivoice-stream`. Thêm nhiều entry hơn thì tăng giá trị này nếu GPU đủ VRAM, nếu không server sẽ unload model idle lâu nhất và request sau phải load lại.
-- Gateway không cần sửa: [`configs/gateway.toml`](../configs/gateway.toml) vẫn giữ mặc định cho cả bốn id (`language`, speed bands cho `g-omnivoice-stream`, `normalize = false` cho `omnivoice`). Gateway forward mọi model id; id không có trên upstream sẽ nhận lỗi của audio.cpp.
+- `max_loaded_models: 2` vừa đủ cho `g-omnivoice` + `g-omnivoice-stream`. Thêm entry thì tăng giá trị này nếu GPU đủ VRAM, nếu không server sẽ unload model idle lâu nhất và request sau phải load lại.
+- Muốn so model khác ở chế độ streaming thì thêm entry riêng có `"mode": "streaming"` (giống `g-omnivoice-stream`, đổi `id` và `path`).
+- Gateway không cần sửa: [`configs/gateway.toml`](../configs/gateway.toml) vẫn giữ mặc định cho các id này (`language` cho `omnivoice-vietnamese`, `normalize = false` cho `omnivoice`). Gateway forward mọi model id; id không có trên upstream sẽ nhận lỗi của audio.cpp.
 - Kiểm tra sau khi khởi động lại: `curl -s localhost:8080/v1/models` phải liệt kê id vừa thêm.
 
 ### 4.2. Khởi động
@@ -558,7 +558,7 @@ Luôn kiểm tra HTTP status. Khi lỗi, body trả về là JSON `{"error":{...
 
 ### 5.3. Streaming
 
-Request phải gửi tới entry có `mode: "streaming"` (ở đây là `g-omnivoice-stream`). Config mặc định không có entry này; thêm nó vào `configs/server.json` theo [mục 4.1.1](#411-thêm-lại-các-model-đã-bỏ) trước khi chạy các ví dụ dưới đây. Mỗi chunk text được sinh xong sẽ trả về ngay. `text_chunk_size` nhỏ thì nhận được audio đầu tiên sớm hơn, nhưng ngữ điệu giữa các chunk có thể kém liền mạch hơn.
+Request phải gửi tới entry có `mode: "streaming"` (ở đây là `g-omnivoice-stream`). Mỗi chunk text được sinh xong sẽ trả về ngay. `text_chunk_size` nhỏ thì nhận được audio đầu tiên sớm hơn, nhưng ngữ điệu giữa các chunk có thể kém liền mạch hơn.
 
 SSE:
 
@@ -612,7 +612,7 @@ r = client.audio.speech.create(
 )
 r.write_to_file("design.wav")
 
-# Streaming PCM thô (cần entry g-omnivoice-stream, mục 4.1.1)
+# Streaming PCM thô
 with client.audio.speech.with_streaming_response.create(
     model="g-omnivoice-stream", voice="vieneu_v3_Mai_Anh",
     input="Thử streaming bằng SDK. Câu thứ hai.",
@@ -627,8 +627,6 @@ with client.audio.speech.with_streaming_response.create(
 Các trường riêng của audio.cpp như `voice_ref`, `reference_text`, `options`, `seed`, `language` được truyền qua `extra_body`.
 
 ### 5.5. Python, chỉ dùng thư viện chuẩn và SSE
-
-Cần entry `g-omnivoice-stream` (mục 4.1.1).
 
 ```python
 import base64, json, urllib.request, wave

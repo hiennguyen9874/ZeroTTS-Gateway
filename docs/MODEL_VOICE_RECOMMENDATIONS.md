@@ -15,8 +15,8 @@ Khuyến nghị mặc định:
   `vieneu_v3_Ngoc_Tran`.
 - Chưa chọn Doan_Trang hoặc Quang_Son làm giọng mặc định cho G-OmniVoice.
 
-`configs/server.json` mặc định chỉ khai báo `g-omnivoice`. Muốn dùng
-`g-omnivoice-stream`, `omnivoice-vietnamese` hoặc `omnivoice` thì thêm lại entry
+`configs/server.json` mặc định chỉ khai báo `g-omnivoice` và `g-omnivoice-stream`.
+Muốn dùng `omnivoice-vietnamese` hoặc `omnivoice` thì thêm lại entry
 theo [USAGE.md, mục 4.1.1](USAGE.md#411-thêm-lại-các-model-đã-bỏ).
 
 Đây là khuyến nghị theo độ đầy đủ của từ qua ASR và các chỉ số audio.
@@ -203,7 +203,7 @@ Trên G-OmniVoice offline, năm giọng, seed 42, các ca sau đạt recall 1,00
 | Muốn giữ Doan_Trang | Nghe A/B G-OmniVoice và OmniVoice Vietnamese trước khi chốt |
 | Tag bắt buộc đúng hoặc đọc nguyên văn tuyệt đối | Chưa có tổ hợp được xác nhận đáp ứng |
 
-`g-omnivoice-stream` và `omnivoice-vietnamese` không có trong config mặc định; thêm
+`omnivoice-vietnamese` không có trong config mặc định; thêm
 lại theo [USAGE.md, mục 4.1.1](USAGE.md#411-thêm-lại-các-model-đã-bỏ).
 
 ### Cấu hình nên giữ
