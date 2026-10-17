@@ -1,0 +1,37 @@
+# audio.cpp (the upstream) only, built from the pinned submodule (docker/audiocpp.Dockerfile).
+# Variables come from .env (see .env.example).
+#   alone, e.g. on a separate GPU host:  docker compose -f compose.audiocpp.yaml up -d --build
+#   with the gateway on the same host:   COMPOSE_FILE=compose.yaml:compose.audiocpp.yaml:compose.stack.yaml
+services:
+  audiocpp:
+    build:
+      context: references/audio.cpp
+      # Relative to the build context; the Dockerfile lives in this repo, not in the submodule.
+      dockerfile: ../../docker/audiocpp.Dockerfile
+      args:
+        CUDA_VERSION: ${AUDIOCPP_CUDA_VERSION:-12.6.3}
+        CUDA_DOCKER_ARCH: ${AUDIOCPP_CUDA_ARCH:-80}
+        # Only shown by --version; keep in step with the submodule pin.
+        AUDIOCPP_VERSION: ${AUDIOCPP_VERSION:-65df584a}
+    image: ${AUDIOCPP_IMAGE:-omnivoice-audiocpp:local}
+    restart: unless-stopped
+    stop_grace_period: 30s
+    # Same layout as the repo, so configs/server.json (paths relative to itself: ../models,
+    # ../voices) works unchanged. The image's CMD adds --host 0.0.0.0 --port 8080 --no-ui.
+    # Long syntax so a missing ./models fails at "up" instead of becoming an empty directory.
+    volumes:
+      - { type: bind, source: ./configs, target: /srv/configs, read_only: true, bind: { create_host_path: false } }
+      - { type: bind, source: ./models, target: /srv/models, read_only: true, bind: { create_host_path: false } }
+      - { type: bind, source: ./voices, target: /srv/voices, read_only: true, bind: { create_host_path: false } }
+    # audio.cpp has no auth and reads voice_ref paths: published on loopback by default
+    # (listening scripts, debugging). Set AUDIOCPP_BIND only when a gateway on another host needs it.
+    ports:
+      - ${AUDIOCPP_BIND:-127.0.0.1}:${AUDIOCPP_PORT:-8080}:8080
+    # One GPU; it appears as device 0 inside the container, matching "device": 0 in server.json.
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["${AUDIOCPP_GPU:-0}"]
+              capabilities: [gpu]

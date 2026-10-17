@@ -35,7 +35,9 @@ git submodule update --init references/audio.cpp
 git -C references/audio.cpp submodule update --init --recursive
 ```
 
-Đổi bản audio.cpp: checkout commit mới trong `references/audio.cpp`, chạy lại test của gateway, rồi commit thay đổi submodule.
+Đổi bản audio.cpp: checkout commit mới trong `references/audio.cpp`, chạy lại test của gateway, rồi commit thay đổi submodule. Nếu chạy audio.cpp bằng Docker, sửa luôn `AUDIOCPP_VERSION` trong `compose.audiocpp.yaml` và build lại image ([DEPLOY.md](DEPLOY.md#vận-hành)).
+
+Không muốn build trên host: [DEPLOY.md](DEPLOY.md) build audio.cpp trong Docker với cùng tùy chọn (CUDA 12.6, arch 80, chỉ OmniVoice).
 
 ## 3. Build
 

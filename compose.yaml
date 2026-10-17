@@ -1,4 +1,5 @@
 # Gateway only; points at an audio.cpp running elsewhere. Variables come from .env (see .env.example).
+# audio.cpp in Docker as well: compose.audiocpp.yaml (+ compose.stack.yaml on the same host).
 services:
   gateway:
     build: .

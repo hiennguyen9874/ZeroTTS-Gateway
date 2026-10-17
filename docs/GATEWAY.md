@@ -40,7 +40,7 @@ Body lỗi theo dạng của audio.cpp: `{"error":{"message","type"}}`.
 
 ## Chạy bằng Docker
 
-Container chỉ chứa gateway; audio.cpp chạy ở nơi khác (trên host hoặc máy riêng).
+Container chỉ chứa gateway. audio.cpp chạy trên host, ở máy riêng, hoặc trong container riêng cùng compose (`compose.audiocpp.yaml` + `compose.stack.yaml`): xem [DEPLOY.md](DEPLOY.md). Phần dưới là cách chỉ chạy gateway (`COMPOSE_FILE=compose.yaml`, mặc định).
 
 ```bash
 cp .env.example .env        # sửa OMNIVOICE_GATEWAY_UPSTREAM_URL, OMNIVOICE_GATEWAY_API_KEY
@@ -53,3 +53,4 @@ curl localhost:8000/ready   # 200 khi tới được upstream, 503 khi không
 - Trong container gateway lắng nghe trên `0.0.0.0:8000` (image đặt `OMNIVOICE_GATEWAY_HOST=0.0.0.0`; `port` vẫn lấy từ config, đổi thì sửa cả `ports` trong `compose.yaml`). Cổng trên host: `GATEWAY_PORT`.
 - `127.0.0.1` trong container là chính container. audio.cpp trên host: dùng `http://host.docker.internal:8080` (mặc định, compose đã thêm `host-gateway`) và cho audio.cpp lắng nghe trên `0.0.0.0` thay vì `127.0.0.1`. audio.cpp ở máy khác: dùng host/IP của máy đó.
 - Image: `python:3.12-slim`, `uv sync --locked --no-dev`, chạy bằng user không phải root; `.dockerignore` chỉ cho vào `pyproject.toml`, `uv.lock`, `README.md`, `src/`.
+- Healthcheck của image gọi `/health` (gateway còn sống), không gọi `/ready`: upstream chết không làm Docker restart gateway. Load balancer nên kiểm tra `/ready`.

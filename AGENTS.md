@@ -21,6 +21,7 @@ A thin **gateway** in front of audio.cpp (the **upstream**) running OmniVoice. I
 - `docs/INSTALL.md`: building audio.cpp with CUDA 12.6 on A100.
 - `docs/USAGE.md`: converting OmniVoice checkpoints to GGUF, CLI/server usage, voice clone/design, model table.
 - `docs/GATEWAY.md`: running the gateway, env vars, routes, config, Docker.
+- `docs/DEPLOY.md`: Docker deployment shapes (gateway only, audio.cpp only, both) via `COMPOSE_FILE`; `docker/audiocpp.Dockerfile` builds the upstream from the pinned submodule.
 - `docs/TEXT_PIPELINE.md`: text pipeline behaviour, pronunciation lexicon, adding golden cases.
 - `docs/LISTENING.md`: `render_samples.py`/`render_all.py` listening runs, ASR scoring, output format.
 - `docs/MODEL_VOICE_RECOMMENDATIONS.md`: model/voice evaluation and recommended defaults.
