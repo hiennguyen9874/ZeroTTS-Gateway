@@ -65,6 +65,8 @@ Ca golden nằm ở `tests/golden/pipeline.json`, chạy qua route dry-run. Mỗ
 
 ## Nghe thử mẫu
 
+Lượt nghe lại #7 (model/giọng/seed, đối chứng và giới hạn): [báo cáo](docs/reports/issue7-listening.md).
+
 Cần audio.cpp (`docs/USAGE.md`) và gateway đang chạy. Script đọc các ca không lỗi (mặc định golden; xem Bộ câu nghe thử), gọi cả gateway (A) lẫn audio.cpp trực tiếp (B) với cùng model, voice, seed, rồi lưu WAV, chỉ số và trang so sánh:
 
 ```bash
@@ -97,7 +99,9 @@ uv run python scripts/render_samples.py --set listening --question 3 --out outpu
 uv run python scripts/render_samples.py --set listening --question 3 --model g-omnivoice-stream --out outputs/listen-q3-stream
 ```
 
-Ca clone (`"clone": "<voice>"`) gửi `voices/<voice>.wav` dạng base64 trong `voice_ref` (không gửi `voice`), `reference_text` lấy từ dòng `<voice>|…` của `voices/prompt_text`. Phía A (gateway) gửi `reference_text` nguyên văn để gateway chuẩn hoá; phía B (direct) gửi `reference_text` **nguyên văn** và lấy engine text của gateway làm `input`, nên hai phía cùng input, seed, model và chỉ khác `reference_text`. Cột `reference_text` trong `results.csv` ghi `normalized`/`verbatim`; trang HTML hiện văn bản tham chiếu của từng phía.
+Ca nghe có thể đặt `speed` để giữ cùng tốc độ ở cả hai phía; CSV ghi `requested_speed` (trống khi không chỉ định, không phải tốc độ hiệu lực do gateway thêm). Hai ca `tag-case-upper/lower` tắt normalize và giữ cùng dấu câu, `speed=1.0`, để tách ảnh hưởng của chữ hoa khỏi các bước khác. Nhóm `loanwords` chỉ là cách đọc ứng viên cho #17, chưa phải từ điển mặc định. Không dùng `--normalize-on` khi so sánh hai ca chữ hoa/thường này.
+
+Ca clone (`"clone": "<voice>"`) gửi `voices/<voice>.wav` dạng base64 trong `voice_ref` (không gửi `voice`), `reference_text` lấy từ dòng `<voice>|…` của `voices/prompt_text`. Phía A (gateway) gửi `reference_text` nguyên văn để gateway chuẩn hoá; phía B (direct) gửi `reference_text` **nguyên văn** và lấy engine text của gateway làm `input`, nên hai phía cùng input, seed, model và chỉ khác `reference_text`. Script đặt `speed=1.0` cho cả hai phía (hoặc `speed` của ca nếu có), không để speed band của gateway làm sai đối chứng. Bộ câu có audio tham chiếu Mai_Anh, Doan_Trang và Ngoc_Linh. Cột `reference_text` trong `results.csv` ghi `normalized`/`verbatim`; trang HTML hiện văn bản tham chiếu của từng phía.
 
 Thêm ca: thêm một dòng vào `scripts/listening_cases.json` với `id` ổn định (không đổi, không dùng lại), `group`, `questions` (danh sách 1–5, có thể rỗng), `input`, `why` (ca này để làm gì), `review_focus` (cần nghe điều gì); tuỳ chọn `language`, `normalize`, `clone`. Chỉ dùng văn bản tự viết, không dùng dữ liệu thật. Muốn so sánh hai biến thể thì thêm hai ca và nhắc id của nhau trong `review_focus`. Chạy `uv run pytest tests/test_render_samples.py` để kiểm tra bộ câu.
 
@@ -158,6 +162,7 @@ Output trong `--out` (mặc định `outputs/samples`):
   - `flags`: gợi ý chỗ cần nghe kỹ, không phải đánh giá chất lượng: `silent`, `very_short` (< 0,3 s), `clipping`, `long_lead_silence` (> 1 s), `long_trail_silence` (> 1,5 s); khi có ASR thêm `words_missing` (`word_recall` < 0,8) và `asr_failed`.
   - `word_recall`, `asr_text`: chỉ khi có ASR (xem Chấm bằng ASR).
   - `text_warnings` (`X-Text-Warnings` của gateway; phía direct luôn trống), `known_issue`, `review_focus`, `input`, `engine_text` (engine text của gateway, ghi cho cả hai phía).
+  - `requested_speed`: tốc độ chỉ định trong thí nghiệm ở cả hai phía; ca clone mặc định `1.0`. Trống khi script không gửi speed; gateway vẫn có thể thêm speed theo config.
   - `sent_text`: text request của phía đó đưa tới model: phía gateway là engine text, phía direct là input text thô (ca clone: engine text của gateway).
   - Người nghe điền: `review_result` (`pass` / `fail` / `ambiguous` / `not-listened`), `reviewer`, `notes`.
 

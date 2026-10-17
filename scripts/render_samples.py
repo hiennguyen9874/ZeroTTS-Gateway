@@ -76,7 +76,8 @@ WORD = re.compile(r"[^\W_]+")
 REPORTS = ("results.csv", "manifest.json", "index.html")
 CSV_FIELDS = [
     "case_id", "group", "questions", "side", "normalize", "reference_text", "result",
-    "http_status", "file", "duration_s", "ttfb_ms", "total_ms", "rtf", "peak_dbfs", "rms_dbfs",
+    "requested_speed", "http_status", "file", "duration_s", "ttfb_ms", "total_ms", "rtf",
+    "peak_dbfs", "rms_dbfs",
     "lead_silence_ms", "trail_silence_ms", "clipped_samples", "flags", "word_recall",
     "text_warnings", "known_issue", "review_focus", "input", "engine_text", "sent_text",
     "asr_text", "review_result", "reviewer", "notes",
@@ -154,6 +155,10 @@ def main() -> int:
             "seed": args.seed,
             "language": case.get("language", "vi"),
         }
+        # Experimental controls must be identical on both sides. In clone pairs, an explicit
+        # speed disables gateway speed bands so only reference_text normalization differs.
+        if "speed" in case or "clone" in case:
+            body["speed"] = case.get("speed", 1.0)
         if "clone" in case:
             audio_b64, reference = clone_reference(case["clone"])
             body |= {
@@ -511,6 +516,7 @@ def write_csv(path: Path, samples: list[Sample]) -> None:
                         "" if "clone" not in s.case
                         else "normalized" if s.side == "gateway" else "verbatim"
                     ),
+                    "requested_speed": s.case.get("speed", 1.0 if "clone" in s.case else ""),
                     "result": s.result,
                     "http_status": s.http_status or "",
                     "file": s.file,
@@ -611,6 +617,9 @@ def render_html(samples: list[Sample], manifest: dict) -> str:
                 else '<div class="warn">normalize: false (tests cleanup only; production has'
                 " normalize on, so symbols such as @ &lt; &gt; reach the model as typed)</div>"
             )
+        control_speed = c.get("speed", 1.0 if "clone" in c else None)
+        if control_speed is not None:
+            normalize += f'<div class="muted">controlled speed: {control_speed} (both sides)</div>'
         focus = (
             f"<div><b>listen for:</b> {e(c['review_focus'])}</div>" if c.get("review_focus") else ""
         )

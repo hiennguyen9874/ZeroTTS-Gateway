@@ -19,6 +19,8 @@ from pathlib import Path
 import httpx
 import pytest
 
+from omnivoice_gateway.config import ModelDefaults, ShortTextSpeedBand
+
 from .conftest import ScriptedStream
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -362,30 +364,75 @@ def test_renders_listening_set_with_questions_and_clone_sides(run, upstream, tmp
     assert manifest["questions"] == {
         str(q): [case["id"] for case in LISTENING if q in case["questions"]] for q in range(1, 6)
     }
-    assert manifest["groups"]["clone"] == ["clone-plain", "clone-numbers"]
+    assert manifest["groups"]["clone"] == [c["id"] for c in LISTENING if "clone" in c]
 
     # Clone: same reference audio, seed and model input on both sides; only reference_text differs.
-    voice_wav = base64.b64encode((ROOT / "voices" / "vieneu_v3_Mai_Anh.wav").read_bytes()).decode()
-    transcript = "Chào mừng đến với"
     sent = [json.loads(r.content) for r in upstream.calls("POST", SPEECH)]
     clones = [body for body in sent if "voice_ref" in body]
-    assert len(clones) == 4  # two clone cases, gateway then direct
+    clone_cases = [c for c in LISTENING if "clone" in c]
+    assert len(clones) == 2 * len(clone_cases)
     engine = {r["case_id"]: r["engine_text"] for r in rows}
-    for (via_gateway, direct), case_id in zip(
-        (clones[0:2], clones[2:4]), ("clone-plain", "clone-numbers"), strict=True
-    ):
+    for i, case in enumerate(clone_cases):
+        via_gateway, direct = clones[2 * i : 2 * i + 2]
+        voice_wav = base64.b64encode(
+            (ROOT / "voices" / f"{case['clone']}.wav").read_bytes()
+        ).decode()
         for body in (via_gateway, direct):
             assert body["voice_ref"] == {"type": "base64", "data": voice_wav}
             assert "voice" not in body
-            assert (body["seed"], body["input"]) == (3, engine[case_id])
-        assert direct["reference_text"].startswith(transcript)
-        assert via_gateway["reference_text"].startswith(transcript.lower())
+            assert (body["seed"], body["input"], body["speed"]) == (3, engine[case["id"]], 1.0)
+        normalized = httpx.post(
+            run.gateway + "/v1/text/normalize",
+            json={"input": direct["reference_text"], "language": "vi"},
+        ).json()["engine_text"]
+        assert via_gateway["reference_text"] == normalized
+    for case in LISTENING:
+        if "speed" in case:
+            pair = [b for b, r in zip(sent, rows, strict=True) if r["case_id"] == case["id"]]
+            assert [b["speed"] for b in pair] == [case["speed"], case["speed"]]
+            assert all(
+                r["requested_speed"] == str(case["speed"])
+                for r in rows
+                if r["case_id"] == case["id"]
+            )
     assert all(body["voice"] == "vieneu_v3_Mai_Anh" for body in sent if "voice_ref" not in body)
 
     page = (out / "index.html").read_text("utf-8")
     assert "reference_text (normalized): chào mừng đến với" in page
     assert "reference_text (verbatim): Chào mừng đến với" in page
     assert "Q5" in page
+
+
+def test_clone_and_case_controls_override_operator_speed_bands(
+    live_gateway, live_upstream, upstream, tmp_path
+):
+    upstream.on("GET", "/v1/models", lambda r: httpx.Response(200, json=MODELS))
+    upstream.on("POST", SPEECH, speaker(lambda body: [pcm((0.5, 1000))]))
+    gateway = live_gateway(
+        models={
+            "g-omnivoice": ModelDefaults(
+                language="vi", short_text_speed_bands=(ShortTextSpeedBand(12, 0.6),)
+            )
+        }
+    )
+    result = subprocess.run(
+        [
+            sys.executable, str(SCRIPT), "--gateway", gateway, "--upstream", live_upstream,
+            "--set", "listening", "--id", "clone-doan-trang", "--id", "tag-case-upper",
+            "--id", "tag-case-lower", "--out", str(tmp_path),
+        ],
+        capture_output=True, text=True, timeout=300, env=script_env(),
+    )  # fmt: skip
+    assert result.returncode == 0, result.stderr
+    sent = [json.loads(r.content) for r in upstream.calls("POST", SPEECH)]
+    assert len(sent) == 6
+    assert all(b["speed"] == 1.0 for b in sent)
+    assert sent[0]["input"] == sent[1]["input"] == "Xin chào các bạn [laughter]."
+    assert sent[2]["input"] == sent[3]["input"] == "xin chào các bạn [laughter]."
+    assert sent[4]["input"] == sent[5]["input"]
+    assert sent[4]["voice_ref"] == sent[5]["voice_ref"]
+    assert all(r["requested_speed"] == "1.0" for r in read_rows(tmp_path))
+    assert "controlled speed: 1.0 (both sides)" in (tmp_path / "index.html").read_text("utf-8")
 
 
 def test_filters_listening_set_by_question(run, upstream, tmp_path):
