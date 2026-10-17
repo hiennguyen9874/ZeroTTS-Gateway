@@ -16,7 +16,7 @@ Gateway không tự sinh audio, không chia/ghép, không retry, không xếp h�
 git submodule update --init
 ```
 
-Không cần `--recursive`: submodule lồng của audio.cpp chỉ dùng cho WebUI ([docs/INSTALL.md](docs/INSTALL.md#2-lấy-source)).
+Không cần `--recursive`: submodule lồng của audio.cpp chỉ chứa server frontend tuỳ chọn (MP3/FLAC), WebUI đã build sẵn trong source ([docs/INSTALL.md](docs/INSTALL.md#2-lấy-source)).
 
 **1. Chạy audio.cpp** (build: [docs/INSTALL.md](docs/INSTALL.md); model và server: [docs/USAGE.md](docs/USAGE.md)):
 

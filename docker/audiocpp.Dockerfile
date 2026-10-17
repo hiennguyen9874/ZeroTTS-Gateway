@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1
 # audio.cpp (the upstream) server, built from the pinned submodule references/audio.cpp.
 #
 # Trimmed copy of references/audio.cpp/.devops/cuda.Dockerfile. Differences, all on purpose:
@@ -5,7 +6,9 @@
 #     only the audiocpp_server target: much faster than the upstream image's full model set;
 #   - CUDA 12.6 + GCC 13 by default (the toolkit tested on the host, docs/INSTALL.md;
 #     nvcc 12.6 rejects the upstream default GCC 14);
-#   - CUDA arch 80 (A100) by default. The upstream default list only has 80-virtual (PTX JIT).
+#   - CUDA arch 80 (A100) by default. The upstream default list only has 80-virtual (PTX JIT);
+#   - no python3/model_specs: WebUI installs use the C++ package manager and embedded specs;
+#   - AUDIOCPP_UI=off|on|manage selects the WebUI mode at run time (entrypoint below).
 #
 # Build context is references/audio.cpp, so its own .dockerignore applies (excludes build/, docs/, ...).
 # Used by compose.audiocpp.yaml; by hand, from the repo root:
@@ -22,6 +25,8 @@ ARG GCC_VERSION=13
 ARG CUDA_DOCKER_ARCH=80
 ARG AUDIOCPP_MODELS=omnivoice
 ARG AUDIOCPP_VERSION=dev
+# Native package manager, required by AUDIOCPP_UI=manage. Fetches the pinned BoringSSL at configure.
+ARG AUDIOCPP_NATIVE_MODEL_MANAGER=ON
 
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
@@ -39,7 +44,7 @@ RUN cmake -S . -B build -G Ninja \
         -DAUDIOCPP_MODEL_SET=custom \
         -DAUDIOCPP_MODELS="${AUDIOCPP_MODELS}" \
         -DAUDIOCPP_DEPLOYMENT_BUILD=ON \
-        -DAUDIOCPP_BUILD_NATIVE_MODEL_MANAGER=OFF \
+        -DAUDIOCPP_BUILD_NATIVE_MODEL_MANAGER="${AUDIOCPP_NATIVE_MODEL_MANAGER}" \
         -DAUDIOCPP_VERSION="${AUDIOCPP_VERSION}" \
         -DENGINE_ENABLE_CPU_ALL_VARIANTS=ON \
         -DENGINE_ENABLE_CUDA=ON \
@@ -58,7 +63,8 @@ RUN cmake -S . -B build -G Ninja \
 
 FROM docker.io/nvidia/cuda:${CUDA_VERSION}-runtime-ubuntu${UBUNTU_VERSION}
 
-# libgomp1: OpenMP; ffmpeg: decoding non-WAV voice references; curl: healthcheck.
+# libgomp1: OpenMP; ffmpeg: decoding non-WAV voice references; curl: healthcheck;
+# ca-certificates: HTTPS for WebUI model downloads.
 RUN apt-get update && \
     apt-get install -y --no-install-recommends libgomp1 ffmpeg curl ca-certificates && \
     rm -rf /var/lib/apt/lists/*
@@ -67,10 +73,32 @@ RUN apt-get update && \
 WORKDIR /app
 COPY --from=build /out/ /app/
 
+# WebUI mode, one variable so a typo fails instead of silently enabling the UI (a config file
+# turns the UI on unless --no-ui is passed):
+#   off     API only (default)
+#   on      WebUI for the configured models (--ui)
+#   manage  WebUI plus downloads, load/unload, package delete, server directory browsing
+#           (--ui --ui-management); downloads go to /app/models
+COPY --chmod=755 <<'EOF' /app/entrypoint.sh
+#!/bin/sh
+set -e
+case "${AUDIOCPP_UI:-off}" in
+    off) set -- "$@" --no-ui ;;
+    on) set -- "$@" --ui ;;
+    manage) set -- "$@" --ui --ui-management ;;
+    *) echo "AUDIOCPP_UI must be off, on or manage, got: ${AUDIOCPP_UI}" >&2; exit 64 ;;
+esac
+exec /app/audiocpp_server "$@"
+EOF
+
+# Model root of AUDIOCPP_UI=manage (<binary dir>/models); mount a volume to keep downloads.
+RUN mkdir -p /app/models && chown ubuntu:ubuntu /app/models
+
 # Non-root (uid 1000, from the base image). Models, voices and config are mounted read-only.
 USER ubuntu
 EXPOSE 8080
 HEALTHCHECK --interval=10s --timeout=5s --start-period=20s --retries=3 \
     CMD curl -fsS http://127.0.0.1:8080/health || exit 1
-ENTRYPOINT ["/app/audiocpp_server"]
-CMD ["--config", "/srv/configs/server.json", "--host", "0.0.0.0", "--port", "8080", "--no-ui"]
+ENV AUDIOCPP_UI=off
+ENTRYPOINT ["/app/entrypoint.sh"]
+CMD ["--config", "/srv/configs/server.json", "--host", "0.0.0.0", "--port", "8080"]

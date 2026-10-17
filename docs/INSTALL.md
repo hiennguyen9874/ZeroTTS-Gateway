@@ -31,9 +31,12 @@ nvidia-smi
 
 ```bash
 git submodule update --init references/audio.cpp
-# Chỉ cần khi dùng WebUI (submodule lồng, URL SSH):
-git -C references/audio.cpp submodule update --init --recursive
+# Không bắt buộc: submodule lồng external/audio.cpp-server-frontends (URL SSH), chỉ cần cho server
+# frontend tuỳ chọn (response_format mp3, nhận MP3/FLAC) khi build với -DAUDIOCPP_BUILD_SERVER_FRONTENDS=ON:
+git -C references/audio.cpp -c 'url.https://github.com/.insteadOf=git@github.com:' submodule update --init --recursive
 ```
+
+WebUI (`--ui`) không cần submodule lồng: bản build sẵn `webui/native/dist/index.html` có trong source và được nhúng vào `audiocpp_server`. `--ui-management` (tải/xoá model từ trình duyệt) cần build với `-DAUDIOCPP_BUILD_NATIVE_MODEL_MANAGER=ON`; build ở mục 3 không bật, image Docker thì có ([DEPLOY.md](DEPLOY.md#webui)).
 
 Đổi bản audio.cpp: checkout commit mới trong `references/audio.cpp`, chạy lại test của gateway, rồi commit thay đổi submodule. Nếu chạy audio.cpp bằng Docker, sửa luôn `AUDIOCPP_VERSION` trong `compose.audiocpp.yaml` và build lại image ([DEPLOY.md](DEPLOY.md#vận-hành)).
 

@@ -16,15 +16,24 @@ services:
     image: ${AUDIOCPP_IMAGE:-omnivoice-audiocpp:local}
     restart: unless-stopped
     stop_grace_period: 30s
+    environment:
+      # WebUI on the same port: off (API only) | on (configured models) | manage (downloads,
+      # load/unload, package delete, server directory browsing). docs/DEPLOY.md, "WebUI".
+      AUDIOCPP_UI: ${AUDIOCPP_UI:-off}
+      # Only for gated/private Hugging Face repos downloaded from the WebUI (manage).
+      HF_TOKEN: ${HF_TOKEN:-}
     # Same layout as the repo, so configs/server.json (paths relative to itself: ../models,
-    # ../voices) works unchanged. The image's CMD adds --host 0.0.0.0 --port 8080 --no-ui.
+    # ../voices) works unchanged. The image's CMD adds --host 0.0.0.0 --port 8080.
     # Long syntax so a missing ./models fails at "up" instead of becoming an empty directory.
     volumes:
       - { type: bind, source: ./configs, target: /srv/configs, read_only: true, bind: { create_host_path: false } }
       - { type: bind, source: ./models, target: /srv/models, read_only: true, bind: { create_host_path: false } }
       - { type: bind, source: ./voices, target: /srv/voices, read_only: true, bind: { create_host_path: false } }
+      # Packages downloaded from the WebUI (AUDIOCPP_UI=manage); kept apart from ./models.
+      - audiocpp-ui-models:/app/models
     # audio.cpp has no auth and reads voice_ref paths: published on loopback by default
-    # (listening scripts, debugging). Set AUDIOCPP_BIND only when a gateway on another host needs it.
+    # (listening scripts, debugging, WebUI via ssh -L). Set AUDIOCPP_BIND only when a gateway on
+    # another host needs it, and never together with AUDIOCPP_UI=manage.
     ports:
       - ${AUDIOCPP_BIND:-127.0.0.1}:${AUDIOCPP_PORT:-8080}:8080
     # One GPU; it appears as device 0 inside the container, matching "device": 0 in server.json.
@@ -35,3 +44,6 @@ services:
             - driver: nvidia
               device_ids: ["${AUDIOCPP_GPU:-0}"]
               capabilities: [gpu]
+
+volumes:
+  audiocpp-ui-models:
