@@ -18,7 +18,7 @@ from sea_g2p import Normalizer
 
 # Bump whenever a rule changes so a mis-reading can be traced to the version that produced it.
 # The pipeline version also carries a hash of the lexicon (see Pipeline.version).
-RULES_VERSION = "4"
+RULES_VERSION = "5"
 
 LEXICON_FIELDS = ("word", "replacement", "note")
 
@@ -136,6 +136,59 @@ _TITLE = "|".join(map(re.escape, sorted(_TITLES, key=len, reverse=True)))
 # A chain of titles, each with its period ("PGS.TS.", "ThS. BS."), right before a letter.
 _TITLE_CHAIN = re.compile(rf"(?<![\w.])(?:(?:{_TITLE})\. ?)+(?=[^\W\d_])")
 _TITLE_ONE = re.compile(rf"({_TITLE})\.")
+
+_DIGIT_WORDS = ("không", "một", "hai", "ba", "bốn", "năm", "sáu", "bảy", "tám", "chín")
+# A number that is not part of a longer token: no word char, dot, comma or sign right before it.
+_NUM_START = r"(?<![\w.,+/:-])"
+# ... and nothing numeric or wordy right after it ("1.250.000", "12/2024", "50kg").
+_NUM_END = r"(?!\w|[.,/:]\d)"
+# Hotline 1800/1900 with its number, grouped or not ("1900 1234", "1800.6868", "19001234").
+# sea-g2p reads the second group as a cardinal ("một nghìn hai trăm ba mươi bốn").
+_HOTLINE = re.compile(rf"{_NUM_START}(1[89]00)((?:[ .-]?\d{{2,4}}){{1,3}}){_NUM_END}")
+_DIGIT_GROUP = re.compile(r"\d+")
+# A digit string right after a code keyword ("Mã OTP là 123456", "STK 0123 4567"): read digit by
+# digit. Uppercase acronyms are case-sensitive so "pin 5000mAh" (battery) is not a PIN.
+_CODE_WORD = (
+    r"(?:[Mm]ã(?: (?:đơn(?: hàng)?|số(?: thuế)?|giao dịch|xác nhận))?|OTP|PIN|STK|[Ss]ố tài khoản)"
+)
+_CODE = re.compile(
+    rf"(?<!\w)({_CODE_WORD}(?:\s*[:#]|\s+là|\s+{_CODE_WORD})*\s*)"
+    rf"(\d+(?:[ .-]\d{{2,}})*){_NUM_END}"
+)
+# A digit string of 4+ digits starting with 0 is a phone number or code, never an amount.
+_LEADING_ZERO = re.compile(rf"{_NUM_START}0\d{{3,}}{_NUM_END}")
+# Quarter with a year ("Q1/2024", "Q4-2023"); sea-g2p reads the year digit by digit. "Q1" alone is
+# left as is: it is just as often "quận 1".
+_QUARTER = re.compile(r"(?<!\w)Q([1-4]) ?[/-] ?(\d{4})(?!\w|[.,/]\d)")
+# A time ("8h", "8h30", "8:30") or a bare hour before a dashed range ("8-17h"). sea-g2p drops the
+# dash of a time range, so "đến" is missing.
+_TIME = r"\d{1,2}(?:h(?:\d{2})?|:\d{2})"
+_TIME_RANGE = re.compile(rf"{_NUM_START}({_TIME}|\d{{1,2}}) ?[-–] ?({_TIME})(?!\w|[.,:]\d)")
+# A day range before a month ("25-26/12", "25-26/12/2024"); sea-g2p reads "/12" as "trên mười hai".
+_DAY_RANGE = re.compile(
+    rf"{_NUM_START}(\d{{1,2}}) ?[-–] ?(\d{{1,2}})/(\d{{1,2}})(?:/(\d{{4}}))?{_NUM_END}"
+)
+# A date word right before day/month: read as a date even when the date does not exist
+# ("ngày 31/02"), sea-g2p then gives "ba mươi mốt trên không hai".
+_DATE_WORD = r"(?:[Nn]gày|[Hh]ôm|[Mm]ùng|[Mm]ồng|[Ss]áng|[Tt]rưa|[Cc]hiều|[Tt]ối|[Đđ]êm|[Hh]ạn)"
+_CONTEXT_DATE = re.compile(
+    rf"(?<!\w)({_DATE_WORD}) (\d{{1,2}})/(\d{{1,2}})(?:/(\d{{4}}))?{_NUM_END}"
+)
+# Without a date word, a/b with a < b <= 10 is a fraction ("giảm 1/3 giá"); "7/3" stays.
+_FRACTION = re.compile(
+    rf"(?<!\w)(?:([Tt]háng|[Nn]ăm|[Qq]uý) )?{_NUM_START}(\d{{1,2}})/(\d{{1,2}}){_NUM_END}"
+)
+# Money slang right after the digits: "50k" (sea-g2p: "năm mươi ca"), "2tr", "2tr5".
+_SLANG_K = re.compile(rf"{_NUM_START}(\d+(?:[.,]\d{{1,2}})?)[kK](?!\w)")
+_SLANG_TR = re.compile(rf"{_NUM_START}(\d+)tr(\d{{1,3}})?(?!\w)")
+# English-style decimal: one or two digits after a dot ("3.5"). Runs after the version rules, so
+# "v2.0", "Python 3.12" and "GPT-3.5" keep "chấm"; three digits ("1.250") are thousands.
+_DECIMAL = re.compile(r"(?<![\w.,])(?<!\w-)(\d+)\.(\d{1,2})(?!\d|[.,]\d)")
+# A plain 7 to 9 digit amount ("1250000"); sea-g2p reads it digit by digit like a phone number.
+_PLAIN_AMOUNT = re.compile(rf"{_NUM_START}[1-9]\d{{6,8}}{_NUM_END}")
+# Metric units with a superscript: sea-g2p says "mét bình phương" for "m²" but "mét vuông" for "m2".
+_UNIT_PREFIX = {"": "", "k": "ki lô ", "h": "héc tô ", "d": "đề xi ", "c": "xen ti ", "m": "mi li "}
+_SUPERSCRIPT_UNIT = re.compile(r"(?<![^\W\d_])(k|h|d|c|m)?m([²³])(?![^\W\d_])")
 
 # --- finishing ---------------------------------------------------------------
 
@@ -301,7 +354,76 @@ def _reading_rules(text: str) -> str:
     """Rewrite written forms sea-g2p mis-reads into spoken Vietnamese it leaves as is."""
     text = _TITLE_CHAIN.sub(_title_chain, text)
     text = _V_VERSION.sub(lambda m: "vê " + _version_words(m.group(1)), text)
-    return _NAME_VERSION.sub(_name_version, text)
+    text = _NAME_VERSION.sub(_name_version, text)
+    # Digit-by-digit forms first, so no number rule below reads a code as an amount or date.
+    text = _HOTLINE.sub(lambda m: _digit_groups(f"{m.group(1)} {m.group(2)}"), text)
+    text = _CODE.sub(lambda m: m.group(1) + _digit_groups(m.group(2)), text)
+    text = _LEADING_ZERO.sub(lambda m: _digit_groups(m.group()), text)
+    text = _QUARTER.sub(lambda m: f"quý {m.group(1)} năm {m.group(2)}", text)
+    text = _TIME_RANGE.sub(_time_range, text)
+    text = _DAY_RANGE.sub(_day_range, text)
+    text = _CONTEXT_DATE.sub(_context_date, text)
+    text = _FRACTION.sub(_fraction, text)
+    text = _SLANG_K.sub(lambda m: f"{m.group(1)} nghìn", text)
+    text = _SLANG_TR.sub(_slang_tr, text)
+    text = _DECIMAL.sub(r"\1,\2", text)
+    text = _PLAIN_AMOUNT.sub(lambda m: f"{int(m.group()):,}".replace(",", "."), text)
+    return _SUPERSCRIPT_UNIT.sub(_superscript_unit, text)
+
+
+def _digit_groups(digits: str) -> str:
+    # Words, so sea-g2p cannot read a group as a cardinal; groups keep a pause like "+84 912 345".
+    return ", ".join(
+        " ".join(_DIGIT_WORDS[int(d)] for d in group) for group in _DIGIT_GROUP.findall(digits)
+    )
+
+
+def _time_range(m: re.Match) -> str:
+    return f"{m.group(1)} đến {m.group(2)}"
+
+
+def _day_month(day: str, month: str, year: str | None) -> str | None:
+    if not (1 <= int(day) <= 31 and 1 <= int(month) <= 12):
+        return None
+    return f"{int(day)} tháng {int(month)}" + (f" năm {year}" if year else "")
+
+
+def _day_range(m: re.Match) -> str:
+    first, day, month, year = m.groups()
+    rest = _day_month(day, month, year)
+    if rest is None or not 1 <= int(first) < int(day):
+        return m.group()
+    return f"{int(first)} đến {rest}"
+
+
+def _context_date(m: re.Match) -> str:
+    word, day, month, year = m.groups()
+    date = _day_month(day, month, year)
+    return m.group() if date is None else f"{word} {date}"
+
+
+def _fraction(m: re.Match) -> str:
+    word, a, b = m.groups()
+    # "tháng 5/12", "năm 1/2" belong to sea-g2p's date reading; only a bare a/b is a fraction.
+    if word or not 0 < int(a) < int(b) <= 10:
+        return m.group()
+    return f"{int(a)} phần {int(b)}"
+
+
+def _slang_tr(m: re.Match) -> str:
+    millions, rest = m.groups()
+    if not rest:
+        return f"{millions} triệu"
+    # "2tr5" is 2.5 million: the digits after "tr" are the leading digits of the thousands.
+    return f"{millions} triệu {int(rest.ljust(3, '0'))} nghìn"
+
+
+def _superscript_unit(m: re.Match) -> str:
+    prefix, power = m.groups()
+    unit = _UNIT_PREFIX[prefix or ""] + "mét " + ("vuông" if power == "²" else "khối")
+    # "100m²" -> "100 mét vuông": the space keeps the number and the unit apart.
+    before = m.string[m.start() - 1 : m.start()]
+    return (" " if before.isdigit() else "") + unit
 
 
 def _title_chain(m: re.Match) -> str:
