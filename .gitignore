@@ -6,6 +6,9 @@ dist/
 wheels/
 *.egg-info
 
+# Local deployment settings can contain API keys and tokens.
+/.env
+
 # Virtual environments
 .venv
 

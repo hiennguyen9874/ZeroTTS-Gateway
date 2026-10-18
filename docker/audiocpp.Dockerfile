@@ -1,5 +1,7 @@
 # syntax=docker/dockerfile:1
 # audio.cpp (the upstream) server, built from the pinned submodule references/audio.cpp.
+# CUDA by default; compose.cpu.yaml selects Ubuntu base images and ENGINE_ENABLE_CUDA=OFF.
+# Both builds keep CPU_ALL_VARIANTS so the image is portable across host CPUs.
 #
 # Trimmed copy of references/audio.cpp/.devops/cuda.Dockerfile. Differences, all on purpose:
 #   - only the OmniVoice family (AUDIOCPP_MODELS), deployment build (package specs embedded),
@@ -17,7 +19,10 @@
 ARG UBUNTU_VERSION=24.04
 ARG CUDA_VERSION=12.6.3
 
-FROM docker.io/nvidia/cuda:${CUDA_VERSION}-devel-ubuntu${UBUNTU_VERSION} AS build
+ARG BUILD_IMAGE=docker.io/nvidia/cuda:${CUDA_VERSION}-devel-ubuntu${UBUNTU_VERSION}
+ARG RUNTIME_IMAGE=docker.io/nvidia/cuda:${CUDA_VERSION}-runtime-ubuntu${UBUNTU_VERSION}
+
+FROM ${BUILD_IMAGE} AS build
 
 # nvcc 12.6 supports host GCC <= 13; CUDA >= 12.8 also accepts 14.
 ARG GCC_VERSION=13
@@ -25,6 +30,9 @@ ARG GCC_VERSION=13
 ARG CUDA_DOCKER_ARCH=80
 ARG AUDIOCPP_MODELS=omnivoice
 ARG AUDIOCPP_VERSION=dev
+# CPU deployment overrides the base images and disables CUDA (compose.cpu.yaml).
+ARG ENGINE_ENABLE_CUDA=ON
+ARG BUILD_JOBS=4
 # Native package manager, required by AUDIOCPP_UI=manage. Fetches the pinned BoringSSL at configure.
 ARG AUDIOCPP_NATIVE_MODEL_MANAGER=ON
 
@@ -47,8 +55,8 @@ RUN cmake -S . -B build -G Ninja \
         -DAUDIOCPP_BUILD_NATIVE_MODEL_MANAGER="${AUDIOCPP_NATIVE_MODEL_MANAGER}" \
         -DAUDIOCPP_VERSION="${AUDIOCPP_VERSION}" \
         -DENGINE_ENABLE_CPU_ALL_VARIANTS=ON \
-        -DENGINE_ENABLE_CUDA=ON \
-        -DENGINE_ENABLE_CUDA_GRAPHS=ON \
+        -DENGINE_ENABLE_CUDA="${ENGINE_ENABLE_CUDA}" \
+        -DENGINE_ENABLE_CUDA_GRAPHS="${ENGINE_ENABLE_CUDA}" \
         -DENGINE_ENABLE_VULKAN=OFF \
         -DENGINE_ENABLE_OPENMP=ON \
         -DENGINE_BUILD_EXAMPLES=OFF \
@@ -56,12 +64,12 @@ RUN cmake -S . -B build -G Ninja \
         -DENGINE_BUILD_WARMBENCH=OFF \
         -DCMAKE_CUDA_ARCHITECTURES="${CUDA_DOCKER_ARCH}" \
         -DCMAKE_EXE_LINKER_FLAGS=-Wl,--allow-shlib-undefined && \
-    cmake --build build --parallel "$(nproc)" --target audiocpp_server && \
+    cmake --build build --parallel "${BUILD_JOBS}" --target audiocpp_server && \
     mkdir -p /out && \
     find build -name "*.so*" -exec cp -P {} /out/ \; && \
     cp build/bin/audiocpp_server /out/
 
-FROM docker.io/nvidia/cuda:${CUDA_VERSION}-runtime-ubuntu${UBUNTU_VERSION}
+FROM ${RUNTIME_IMAGE}
 
 # libgomp1: OpenMP; ffmpeg: decoding non-WAV voice references; curl: healthcheck;
 # ca-certificates: HTTPS for WebUI model downloads.

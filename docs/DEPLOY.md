@@ -1,10 +1,12 @@
 # Triển khai bằng Docker
 
-Hai image, ba cách ghép. Gateway và audio.cpp (upstream) luôn là hai container riêng: gateway không cần GPU, audio.cpp cần GPU và model; tách ra thì đổi, build lại hay scale từng bên độc lập.
+Hai image, ba cách ghép. Gateway và audio.cpp (upstream) luôn là hai container riêng: gateway không cần GPU, audio.cpp chạy được bằng CPU hoặc GPU và cần model; tách ra thì đổi, build lại hay scale từng bên độc lập.
 
 | Cách | `COMPOSE_FILE` trong `.env` | Khi nào dùng |
 | --- | --- | --- |
 | Chỉ gateway | `compose.yaml` (mặc định) | audio.cpp đã chạy sẵn: trên host (binary tự build, [INSTALL.md](INSTALL.md)) hoặc ở máy khác |
+| Gateway + audio.cpp (CPU) | `compose.yaml:compose.audiocpp.yaml:compose.stack.yaml:compose.cpu.yaml` | Máy không có GPU; không cần CUDA/NVIDIA Container Toolkit |
+| Chỉ audio.cpp (CPU) | `compose.audiocpp.yaml:compose.cpu.yaml` | Upstream CPU riêng |
 | Chỉ audio.cpp | `compose.audiocpp.yaml` | Máy GPU riêng, gateway chạy ở máy khác |
 | Gateway + audio.cpp | `compose.yaml:compose.audiocpp.yaml:compose.stack.yaml` | Một máy GPU chạy cả hai (khuyến nghị khi chỉ có một máy) |
 
@@ -12,18 +14,51 @@ Hai image, ba cách ghép. Gateway và audio.cpp (upstream) luôn là hai contai
 | --- | --- |
 | `Dockerfile`, `compose.yaml` | Gateway ([GATEWAY.md](GATEWAY.md#chạy-bằng-docker)) |
 | `docker/audiocpp.Dockerfile`, `compose.audiocpp.yaml` | audio.cpp build từ submodule `references/audio.cpp` |
+| `compose.cpu.yaml` | Overlay CPU: base image Ubuntu, tắt CUDA khi build, bỏ yêu cầu GPU và ghi đè backend lúc chạy |
 | `compose.stack.yaml` | Overlay: gateway gọi `http://audiocpp:8080` qua mạng compose, chờ audio.cpp healthy rồi mới chạy |
 
 Mọi lệnh dưới đây chạy từ thư mục gốc repo; `docker compose` đọc `COMPOSE_FILE` trong `.env` nên không cần `-f`.
 
 ## Yêu cầu
 
-- Docker Compose v2.
-- Cho audio.cpp: [NVIDIA Container Toolkit](https://github.com/NVIDIA/nvidia-container-toolkit); `docker run --rm --gpus all nvidia/cuda:12.6.3-base-ubuntu24.04 nvidia-smi` phải chạy được. Host hiện tại: A100, driver 535. Image CUDA 12.6 chấp nhận driver datacenter 535 (`NVIDIA_REQUIRE_CUDA` của image), và kernel build sẵn cho sm_80 nên không phải JIT.
+- Docker Compose v2 (CPU overlay cần >= 2.24.0 để hỗ trợ `!reset`).
+- Chỉ khi dùng GPU cho audio.cpp: [NVIDIA Container Toolkit](https://github.com/NVIDIA/nvidia-container-toolkit); `docker run --rm --gpus all nvidia/cuda:12.6.3-base-ubuntu24.04 nvidia-smi` phải chạy được. Host hiện tại: A100, driver 535. Image CUDA 12.6 chấp nhận driver datacenter 535 (`NVIDIA_REQUIRE_CUDA` của image), và kernel build sẵn cho sm_80 nên không phải JIT.
 - Source audio.cpp: `git submodule update --init references/audio.cpp` (không cần submodule lồng; WebUI đã build sẵn trong source).
 - Model và giọng trên host, đúng đường dẫn trong `configs/server.json`: `models/g-omnivoice-GGUF/g-omnivoice-f16.gguf` ([USAGE.md](USAGE.md)), `voices/` (`scripts/sample_voices.py`).
 
-## Gateway + audio.cpp trên một máy
+## Gateway + audio.cpp trên CPU (không GPU)
+
+```bash
+cp .env.example .env
+# .env: COMPOSE_FILE=compose.yaml:compose.audiocpp.yaml:compose.stack.yaml:compose.cpu.yaml
+#       OMNIVOICE_GATEWAY_API_KEY=<key nếu mở ra mạng>
+docker compose config        # không còn reservation thiết bị NVIDIA
+docker compose up -d --build
+docker compose ps
+curl -f localhost:8000/ready
+```
+
+Overlay dùng cùng Dockerfile nhưng build và chạy trên `ubuntu:24.04`, với CUDA tắt;
+không cần driver NVIDIA hay NVIDIA Container Toolkit. `--backend cpu` ghi đè
+`backend: cuda` trong `configs/server.json`, không cần sửa config dùng chung với GPU.
+Model/giọng, API, WebUI và đường dẫn mount giữ nguyên. Tag image CPU riêng:
+`AUDIOCPP_CPU_IMAGE` (mặc định `omnivoice-audiocpp:cpu`). `AUDIOCPP_BUILD_JOBS`
+(mặc định 4) giới hạn số tác vụ biên dịch để tránh hết RAM.
+
+CPU chậm hơn GPU đáng kể; `/ready` chỉ kiểm tra upstream, không chạy tổng hợp thử.
+Kiểm tra tổng hợp thực sự (thêm Bearer header nếu đã bật auth):
+
+```bash
+curl --fail-with-body --max-time 300 http://localhost:8000/v1/audio/speech \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"g-omnivoice","input":"Xin chào.","voice":"vieneu_v3_Ngoc_Huyen","response_format":"wav"}' \
+  -o /tmp/omnivoice-cpu.wav
+```
+
+Nếu hết deadline 300 giây, kiểm tra log và cân nhắc tăng `deadline_s` trong
+`configs/gateway.toml` theo độ dài input và năng lực CPU; restart gateway sau khi đổi.
+
+## Gateway + audio.cpp trên một máy GPU
 
 ```bash
 cp .env.example .env
