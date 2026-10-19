@@ -92,6 +92,51 @@ PCM16 sau khi căn chỉnh lệch 0,50 s. Đây là tín hiệu cao tần, **kh�
 xung trầm của out.wav**. Nó minh họa rằng đầu ra trước bước trim đã có cụm âm
 rời rạc; không dùng nó để tuyên bố đã tái hiện chính xác lỗi gốc.
 
+## 2b. Đối chứng giọng khác (cùng ngày, lượt tiếp theo)
+
+Thử **toàn bộ 25 giọng** từ HTTP voices API, mỗi giọng seed 1, 2, 3: **75/75**
+request thành công. Giữ cùng input text gốc, model, pipeline và options mặc định,
+gọi qua gateway; không restart dịch vụ. Kim Thanh cũng được thử làm đối chứng.
+
+Đã tái hiện **mẫu xung trầm đầu rồi khoảng lặng dài** ở hai giọng khác:
+
+| Giọng | Seed | Cụm âm đầu | Peak | Năng lượng dưới 300 Hz | Khoảng lặng sau cụm |
+|---|---|---|---|---|---|
+| Thien_Tam_Duc | 2 | 0,13–0,21 s | −21,1 dBFS | 99,96% | khoảng 0,99 s |
+| Duc_Tri | 3 | 0,11–0,17 s | −32,6 dBFS | 98,04% | khoảng 0,96 s |
+
+Mốc cụm âm và khoảng lặng trong bảng dựa trên RMS cửa sổ 10 ms vượt −45 dBFS
+(gộp gap rất ngắn), không phải timestamp phoneme. FFT dùng cửa sổ Hann trên
+cụm âm đó. Bản Đức Trí yếu hơn rõ rệt; mức nghe thấy còn tùy thiết bị/âm lượng.
+Đây là phân tích waveform, chưa phải người nghe chấm đủ 75 file.
+
+Xác nhận bổ sung cho **cả hai ca**:
+
+- Gọi thẳng upstream với engine text và cùng seed: response mặc định giống
+  từng byte với response gateway.
+- Gọi thẳng upstream với `postprocess_output=false`: xung trầm và khoảng
+  ngưng vẫn còn, gần như cùng số đo.
+- Do đó loại được gateway và bước split/trim là nơi tạo hiện tượng này cho
+  hai ca mới. Gain/fade/padding vẫn chạy; chưa phân biệt generator với decoder.
+
+Không thấy cùng mẫu xung trầm này trong 73 file còn lại của lượt quét, gồm
+Kim Thanh seed 1–3. Có vài cụm âm rời cao tần hoặc khoảng nghỉ trong lời;
+không đánh đồng chúng với xung trầm đầu file. Ba seed không đủ bảo đảm một
+giọng luôn sạch lỗi; các mẫu có seed cố định cũng không cho biết tỷ lệ lỗi
+của mọi request không truyền seed.
+
+**Kết luận cập nhật:** không riêng giọng Kim Thanh. Đổi giọng có thể tránh
+một ca lỗi cụ thể, nhưng không phải cách khắc phục triệt để.
+
+Artifact mới, gitignored: `outputs/issue21-voice-check-20261019/` gồm 75 WAV,
+4 WAV đối chứng upstream, `results.json`, `confirmations.json`, baseline gốc.
+Baseline được khôi phục từ các trích đoạn đã lưu và xác nhận SHA-256 đúng
+file gốc; không phục hồi/ghi lại `out.wav` trong workspace.
+
+Để tái hiện, dùng lại curl ban đầu, thêm `"seed":2` và đổi voice thành
+`vieneu_v3_Thien_Tam_Duc`; hoặc seed 3 với `vieneu_v3_Duc_Tri`.
+Giữ `model: g-omnivoice`, input text gốc và các options mặc định.
+
 ## 3. Các điểm cần sửa trong lập luận của comment
 
 ### “postprocess_output=false” không phải audio thô ngay sau decoder
