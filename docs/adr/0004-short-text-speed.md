@@ -33,6 +33,19 @@ short_text_speed_bands = [
 
 Kết quả, giới hạn và cách chạy lại: [báo cáo #19](../reports/issue19-short-greeting.md).
 
+## Cập nhật #22: ramp sau band
+
+Operator có thể thêm `short_text_speed_ramp` (tắt mặc định), dùng **cùng** band hoặc dạng scalar, hoặc đứng riêng:
+
+```toml
+short_text_speed_ramp = { from_syllables = 13, to_syllables = 24, from_speed = 0.6, to_speed = 1.0 }
+```
+
+- Lý do: band kết thúc ở 12 âm tiết nên 12 → 0.6 rồi 13 → không speed là một bước nhảy lớn. Ước lượng của audio.cpp với Ngoc_Linh cho quỹ thời gian ~4,6 s ở 12 âm tiết nhưng ~4,0 s ở 17 âm tiết. vietvoice-lab gửi mỗi piece một request, nên reply xen câu ngắn và câu dài nghe nhanh chậm không đều (vietvoice-lab `docs/settings/04-tts-speech.md` §3).
+- Áp khi dạng ngắn (band hoặc scalar) không chọn speed và engine text có từ `from_syllables` tới `to_syllables` âm tiết (cả hai đầu): speed nội suy tuyến tính từ `from_speed` tới `to_speed`, làm tròn 3 chữ số (18 âm tiết → 0.782). Ngoài khoảng thì không thêm speed. Ở `to_syllables` gateway gửi `to_speed` (1.0 tương đương mặc định upstream).
+- Validate chặt như band: ngưỡng là số nguyên dương, `from_syllables < to_syllables`, speed hữu hạn và dương, và ramp phải bắt đầu **trên** ngưỡng của dạng ngắn (band cuối hoặc `short_text_max_syllables`). Quyền ưu tiên của caller (`speed`, `options.duration_sec`/`duration`), cách đếm engine text và log `short_text_speed` giữ như cũ. Engine text và pipeline version không đổi.
+- `configs/gateway.toml` chỉ ghi ramp dưới dạng comment, **không bật**. #19 từng bác bỏ việc nâng ngưỡng band lên 18/24 vì kéo chậm text dài hơn đôi khi thêm chữ. Ramp chỉ kéo chậm một phần (0.6 → 1.0), nhưng trước khi bật phải nghe/ASR riêng khoảng 13–24 âm tiết để tìm chữ lặp/thừa, và qua A/B 2×2 của vietvoice-lab (#147: short-piece merge × band/ramp).
+
 ## Considered Options
 
 - Luật text ở gateway. Bị loại vì không có cách viết nào làm dài ước lượng mà không đổi nội dung đọc; chữ thường sau dấu phẩy và các dấu câu khác không giúp.

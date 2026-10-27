@@ -25,6 +25,12 @@ lexicon_path = "lexicon.csv"
 # further slowing the shortest lists. Measurements/limitations: docs/adr/0004-short-text-speed.md.
 # Alternative: short_text_speed = 0.7 with short_text_max_syllables = 12 (scalar form, unchanged).
 # Do not combine the scalar and band forms.
+#
+# short_text_speed_ramp (off unless set, issue #22): linear speed between two inclusive engine-text
+# syllable bounds, used when the short form above chose no speed; must start above its last bound.
+# Not enabled here: listen for repeated/extra words at 13-24 syllables and pass the vietvoice-lab
+# 2x2 A/B (#147) first. To try it, add to a model section:
+#   short_text_speed_ramp = { from_syllables = 13, to_syllables = 24, from_speed = 0.6, to_speed = 1.0 }
 [models.g-omnivoice]
 language = "vi"
 short_text_speed_bands = [{ max_syllables = 8, speed = 0.7 }, { max_syllables = 12, speed = 0.6 }]

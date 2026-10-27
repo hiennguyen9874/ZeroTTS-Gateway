@@ -310,7 +310,9 @@ def create_app(settings: Settings, transport: httpx.AsyncBaseTransport | None = 
         """
         defaults = settings.models.get(body.get("model")) or ModelDefaults()
         if "speed" in body or (
-            defaults.short_text_speed is None and not defaults.short_text_speed_bands
+            defaults.short_text_speed is None
+            and not defaults.short_text_speed_bands
+            and defaults.short_text_speed_ramp is None
         ):
             return
         options = body.get("options")
@@ -326,12 +328,16 @@ def create_app(settings: Settings, transport: httpx.AsyncBaseTransport | None = 
                 ),
                 None,
             )
-        else:
+        elif defaults.short_text_speed is not None:
             speed = (
                 defaults.short_text_speed
                 if syllables <= defaults.short_text_max_syllables
                 else None
             )
+        else:
+            speed = None
+        if speed is None and defaults.short_text_speed_ramp is not None:
+            speed = defaults.short_text_speed_ramp.speed(syllables)
         if speed is not None:
             body["speed"] = speed
             request.state.log["short_text_speed"] = speed

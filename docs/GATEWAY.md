@@ -36,7 +36,7 @@ Body lỗi theo dạng của audio.cpp: `{"error":{"message","type"}}`.
 - `connect_timeout_s`: giới hạn riêng cho bước kết nối upstream; quá thì caller nhận `502 upstream_unavailable` và `/ready` trả 503.
 - `max_input_chars`: quá thì trả `400 text_too_long`.
 - `lexicon_path`: từ điển phát âm ([TEXT_PIPELINE.md](TEXT_PIPELINE.md#từ-điển-phát-âm)).
-- `[models.<id>]`: mặc định theo model: `language`, `normalize`, `short_text_speed_bands` / `short_text_speed` ([ADR 0004](adr/0004-short-text-speed.md)). Model không có trong config vẫn được forward.
+- `[models.<id>]`: mặc định theo model: `language`, `normalize`, `short_text_speed_bands` / `short_text_speed`, tuỳ chọn thêm `short_text_speed_ramp` ([ADR 0004](adr/0004-short-text-speed.md)). Model không có trong config vẫn được forward.
 
 ## Chạy bằng Docker
 

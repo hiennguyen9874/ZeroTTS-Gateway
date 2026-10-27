@@ -6,7 +6,7 @@ import time
 import httpx
 import pytest
 
-from omnivoice_gateway.config import ModelDefaults, load_settings
+from omnivoice_gateway.config import ModelDefaults, ShortTextSpeedRamp, load_settings
 
 from .conftest import WAV
 
@@ -684,3 +684,135 @@ def test_log_records_connect_timeout_without_text(make_client, upstream, caplog,
     assert fields["path"] == path
     assert fields["upstream_error"] == "connect_timeout"
     assert secret not in caplog.text + json.dumps([r.fields for r in records], ensure_ascii=False)
+
+
+# --- short_text_speed_ramp (operator option, issue #22, ADR 0004) ------------
+#
+# The bands end at 12 syllables, so 12 → 0.6 and 13 → no speed is a large step in the
+# per-request duration budget. The ramp carries the speed back to 1.0 linearly after the bands.
+
+RAMP_TOML = (
+    '[models.g-omnivoice]\nlanguage = "vi"\n'
+    "short_text_speed_bands = ["
+    "{max_syllables = 8, speed = 0.7}, {max_syllables = 12, speed = 0.6}]\n"
+    "short_text_speed_ramp = "
+    "{from_syllables = 13, to_syllables = 24, from_speed = 0.6, to_speed = 1.0}\n"
+)
+
+
+def syllables_text(n: int) -> str:
+    return " ".join(["ba"] * n) + "."
+
+
+@pytest.mark.parametrize(
+    ("syllables", "speed"),
+    [(8, 0.7), (12, 0.6), (13, 0.6), (18, 0.782), (24, 1.0), (25, None)],
+)
+def test_speed_ramp_continues_after_the_bands(make_client, upstream, tmp_path, syllables, speed):
+    config = tmp_path / "gateway.toml"
+    config.write_text(RAMP_TOML)
+    client = make_client(load_settings(config, env={}))
+    body = speech_body(input=syllables_text(syllables), text_processing={"normalize": False})
+
+    assert client.post(SPEECH, json=body).status_code == 200
+
+    sent = upstream.last_json()
+    assert sent.get("speed") == speed
+    assert ("speed" in sent) == (speed is not None)
+
+
+@pytest.mark.parametrize(
+    "ramp",
+    [
+        "{from_syllables = 12, to_syllables = 24, from_speed = 0.6, to_speed = 1.0}",  # overlaps
+        "{from_syllables = 24, to_syllables = 24, from_speed = 0.6, to_speed = 1.0}",
+        "{from_syllables = 13, to_syllables = 24, from_speed = 0, to_speed = 1.0}",
+        "{from_syllables = 13, to_syllables = 24, from_speed = 0.6, to_speed = -1}",
+        "{from_syllables = 13, to_syllables = 24, from_speed = 0.6, to_speed = nan}",
+        "{from_syllables = 13, to_syllables = 24, from_speed = true, to_speed = 1.0}",
+        "{from_syllables = 13.5, to_syllables = 24, from_speed = 0.6, to_speed = 1.0}",
+        "{from_syllables = 13, to_syllables = 24, from_speed = 0.6}",
+    ],
+)
+def test_speed_ramp_invalid_config_rejected(tmp_path, ramp):
+    config = tmp_path / "gateway.toml"
+    config.write_text(RAMP_TOML.replace(RAMP_TOML.split("short_text_speed_ramp = ")[1], ramp))
+
+    with pytest.raises((ValueError, TypeError)):
+        load_settings(config, env={})
+
+
+def test_speed_ramp_after_the_scalar_form_and_alone(make_client, upstream):
+    ramp = ShortTextSpeedRamp(from_syllables=5, to_syllables=9, from_speed=0.8, to_speed=1.0)
+    scalar = ModelDefaults(
+        language="vi", short_text_speed=0.7, short_text_max_syllables=4, short_text_speed_ramp=ramp
+    )
+    client = make_client(
+        models={
+            "g-omnivoice": scalar,
+            "g-omnivoice-stream": ModelDefaults(language="vi", short_text_speed_ramp=ramp),
+        }
+    )
+    plain = {"text_processing": {"normalize": False}}
+
+    client.post(SPEECH, json=speech_body(input=syllables_text(4), **plain))
+    assert upstream.last_json()["speed"] == 0.7
+    client.post(SPEECH, json=speech_body(input=syllables_text(7), **plain))
+    assert upstream.last_json()["speed"] == 0.9
+    for n, speed in [(4, None), (5, 0.8), (10, None)]:
+        client.post(
+            SPEECH, json=speech_body(model="g-omnivoice-stream", input=syllables_text(n), **plain)
+        )
+        assert upstream.last_json().get("speed") == speed
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        {"speed": 1.0},
+        {"speed": 0.9},
+        {"options": {"duration_sec": 4}},
+        {"options": {"duration": 4}},
+    ],
+)
+def test_speed_ramp_never_overrides_caller_parameters(make_client, upstream, tmp_path, extra):
+    config = tmp_path / "gateway.toml"
+    config.write_text(RAMP_TOML)
+    client = make_client(load_settings(config, env={}))
+
+    client.post(
+        SPEECH,
+        json=speech_body(input=syllables_text(18), text_processing={"normalize": False}, **extra),
+    )
+
+    sent = upstream.last_json()
+    assert sent.get("speed") == extra.get("speed")
+    assert sent.get("options") == extra.get("options")
+
+
+def test_speed_ramp_counts_engine_text_and_logs_without_text(
+    make_client, upstream, tmp_path, caplog
+):
+    config = tmp_path / "gateway.toml"
+    config.write_text(RAMP_TOML)
+    client = make_client(load_settings(config, env={}))
+    caplog.set_level(logging.INFO, logger="omnivoice_gateway")
+
+    # Twelve input words, but "41" reads as "bốn mươi mốt": 14 engine syllables. Tags don't count.
+    text = "[laughter] Hôm nay lớp mình có 41 bạn đến học bài mới rồi. [sigh]"
+    assert client.post(SPEECH, json=speech_body(input=text)).status_code == 200
+
+    assert upstream.last_json()["speed"] == 0.636
+    fields = [r for r in caplog.records if r.name == "omnivoice_gateway"][-1].fields
+    assert fields["short_text_speed"] == 0.636
+    assert "Hôm nay" not in caplog.text + json.dumps(fields, ensure_ascii=False)
+
+
+@pytest.mark.parametrize("model", ["g-omnivoice", "g-omnivoice-stream"])
+def test_shipped_config_leaves_the_ramp_off(make_client, upstream, model):
+    client = make_client(load_settings("configs/gateway.toml", env={}))
+    body = speech_body(model=model, input=syllables_text(18), text_processing={"normalize": False})
+
+    client.post(SPEECH, json=body)
+
+    assert "speed" not in upstream.last_json()

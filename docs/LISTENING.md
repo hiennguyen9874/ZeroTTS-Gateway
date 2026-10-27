@@ -25,6 +25,7 @@ Ngoài golden (mặc định, `--set golden`), `--set listening` chạy bộ câ
 | `long-text` | 3 | Đoạn ~700 ký tự (≥30 s audio) có ngày, số, phần trăm, tiền, giờ, viết tắt |
 | `tags` | 4 | Non-verbal tag ở đầu, giữa, cuối, kề dấu câu, một câu đối chứng không tag, phiên âm CMU |
 | `clone` | 5 | Clone từ `voices/vieneu_v3_Mai_Anh.wav` |
+| `speed-ramp` | – | 13, 18, 24 âm tiết và một câu nhiều dấu phẩy (#22): render một lần với band mặc định, một lần với `short_text_speed_ramp` bật, cùng seed; nghe chữ lặp/thừa và nhảy tốc độ |
 
 ```bash
 # Câu hỏi 1, 2, 4, 5 và ca khó, model offline
