@@ -11,12 +11,26 @@ model_dir = "../models/ZeroTTS"
 # onnxruntime intra-op threads.
 threads = 8
 
-# Model ids served; callers cannot change sampling, only `seed`.
+# Model ids served; callers cannot change sampling, only `seed`. `mode` is "offline" (default:
+# wav/pcm/json) or "streaming" (only stream_format sse/audio), as audio.cpp's model entries.
 [models.zerotts]
 # Used when the request has no `voice`; must exist in the voice directory.
 default_voice = "maichi"
 
 [models.zerotts.sampling]
+cfg_scale = 1.0
+text_temperature = 1.0
+text_topk = 50
+audio_temperature = 0.8
+audio_topk = 25
+audio_topp = 0.95
+audio_repetition_penalty = 1.2
+
+[models.zerotts-stream]
+mode = "streaming"
+default_voice = "maichi"
+
+[models.zerotts-stream.sampling]
 cfg_scale = 1.0
 text_temperature = 1.0
 text_topk = 50

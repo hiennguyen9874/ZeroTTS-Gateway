@@ -4,7 +4,9 @@ Download: `hf download zeroweight-ai/ZeroTTS --local-dir models/ZeroTTS` (ADR 00
 Run explicitly with `uv run python -m pytest -m real_model`.
 """
 
+import base64
 import io
+import json
 import time
 import wave
 from pathlib import Path
@@ -73,3 +75,35 @@ def test_same_seed_reproduces_audio_regardless_of_global_rng(client):
 
     assert first == second
     assert speak(client, seed=99) != first
+
+
+def stream_sse(client, text: str, **extra) -> tuple[bytes, float]:
+    """Stream over SSE; returns the joined PCM and the server's ttft_ms."""
+    body = {"model": "zerotts-stream", "input": text, "stream_format": "sse", **extra}
+    response = client.post("/v1/audio/speech", json=body)
+    assert response.status_code == 200, response.text
+    events = [
+        json.loads(block.removeprefix("data: "))
+        for block in response.text.split("\n\n")
+        if block and block != "data: [DONE]"
+    ]
+    assert response.text.endswith("data: [DONE]\n\n")
+    assert [e["type"] for e in events[:-1]] == ["speech.audio.delta"] * (len(events) - 1)
+    assert events[-1]["type"] == "speech.audio.done"
+    pcm = b"".join(base64.b64decode(e["audio"]) for e in events[:-1])
+    return pcm, events[-1]["timing"]["ttft_ms"]
+
+
+def test_stream_is_nonempty_48k_audio_with_low_ttfa(client):
+    text = " ".join(
+        f"Đây là câu số {i}, kể về một ngày làm việc dài ở văn phòng của công ty." for i in range(6)
+    )
+    pcm, ttft_ms = stream_sse(client, text, seed=5)
+    samples = np.frombuffer(pcm, dtype="<i2")
+
+    # Several segments in one stream, at 48 kHz (about 13 s of speech per 4 sentences).
+    assert len(samples) > 48000 * 10
+    assert np.abs(samples).max() > 1000
+    print(f"stream ttft_ms={ttft_ms}")
+    # Spec: a few hundred ms on CPU; loose bound because the dev machine is shared.
+    assert ttft_ms < 2000

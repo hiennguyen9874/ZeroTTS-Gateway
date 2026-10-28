@@ -16,6 +16,11 @@ from .config import Sampling
 SAMPLE_RATE = 48_000
 # Silence between segments; zerotts's own `say --chunk` default (gap_sec).
 SEGMENT_GAP_SEC = 0.15
+# Streaming decode schedule (spec #1): the first segment ramps 1, 2, 4 ... frames per codec
+# call for low time-to-first-audio, capped here; later segments decode at the cap.
+STREAM_MAX_CHUNK_FRAMES = 16
+# Codec silence frames between streamed segments: about SEGMENT_GAP_SEC at 12.5 frames/s.
+STREAM_GAP_FRAMES = 2
 
 
 @dataclass(frozen=True)
@@ -35,11 +40,17 @@ class Engine(Protocol):
         """Voices by name; valid only after load()."""
 
     def synthesize(
-        self, segments: Sequence[str], voice: str, seed: int | None, sampling: Sampling
+        self,
+        segments: Sequence[str],
+        voice: str,
+        seed: int | None,
+        sampling: Sampling,
+        stream: bool = False,
     ) -> Iterator[np.ndarray]:
         """Synthesize the segments of one engine text in order, as one utterance.
 
-        Yield float32 mono chunks at SAMPLE_RATE. A None seed means fresh entropy.
+        Yield float32 mono chunks at SAMPLE_RATE. A None seed means fresh entropy. With
+        `stream`, yield audio as it is generated; closing the iterator stops synthesis.
         """
 
 
@@ -69,6 +80,7 @@ class ZeroTTSEngine:
         self.model_dir, self.voices_dir, self.threads = Path(model_dir), Path(voices_dir), threads
         self._lock = threading.Lock()
         self._voices: dict = {}
+        self._silence_frame = None
 
     def load(self) -> None:
         from zerotts import ZeroTTS
@@ -81,6 +93,9 @@ class ZeroTTSEngine:
             name: load_voice_dir(path, name, expect_queries=tts.n_voice_queries)
             for name, path in discover_packs(self.voices_dir).items()
         }
+        silence = self.model_dir / "silence_frame.npy"
+        if silence.is_file():
+            self._silence_frame = np.load(silence)
         tts.warmup()
         self._tts = tts
 
@@ -91,12 +106,20 @@ class ZeroTTSEngine:
         }
 
     def synthesize(
-        self, segments: Sequence[str], voice: str, seed: int | None, sampling: Sampling
+        self,
+        segments: Sequence[str],
+        voice: str,
+        seed: int | None,
+        sampling: Sampling,
+        stream: bool = False,
     ) -> Iterator[np.ndarray]:
-        gap = np.zeros(int(SEGMENT_GAP_SEC * SAMPLE_RATE), dtype=np.float32)
         with self._lock:
             # One RNG per request, so a seed reproduces the whole multi-segment audio.
             self._tts.local_frame_decode_sess.rng = np.random.default_rng(seed)
+            if stream:
+                yield from self._stream(segments, voice, sampling)
+                return
+            gap = np.zeros(int(SEGMENT_GAP_SEC * SAMPLE_RATE), dtype=np.float32)
             for i, segment in enumerate(segments):
                 if i:
                     yield gap
@@ -104,3 +127,43 @@ class ZeroTTSEngine:
                     segment, voice=self._voices[voice].emb, **asdict(sampling)
                 )
                 yield audio.reshape(-1).astype(np.float32, copy=False)
+
+    def _stream(
+        self, segments: Sequence[str], voice: str, sampling: Sampling
+    ) -> Iterator[np.ndarray]:
+        """Like zerotts's webui generate_stream: one codec streaming decoder for all segments.
+
+        A decoder per segment would restart the causal decoder's state and click at each
+        boundary. Uses zerotts 0.1.5's frame generator, as its synthesize_stream does.
+        """
+        from zerotts.synthesizer import DEFAULT_MAX_FRAMES
+
+        tts = self._tts
+        voice_emb = tts.resolve_voice(self._voices[voice].emb)
+        decoder = tts.codec.streaming_decoder()
+
+        def decode(frames: list) -> np.ndarray:
+            audio = decoder.decode_chunk(np.stack(frames, axis=-1))
+            return audio.reshape(-1).astype(np.float32, copy=False)
+
+        try:
+            for i, segment in enumerate(segments):
+                if i:
+                    if self._silence_frame is None:
+                        yield np.zeros(int(SEGMENT_GAP_SEC * SAMPLE_RATE), dtype=np.float32)
+                    else:
+                        yield decode([self._silence_frame] * STREAM_GAP_FRAMES)
+                target = 1 if i == 0 else STREAM_MAX_CHUNK_FRAMES
+                frames: list = []
+                for codes in tts._generate_frames(
+                    segment, 4, DEFAULT_MAX_FRAMES, voice_emb=voice_emb, **asdict(sampling)
+                ):
+                    frames.append(codes)
+                    if len(frames) >= target:
+                        yield decode(frames)
+                        frames = []
+                        target = min(STREAM_MAX_CHUNK_FRAMES, target * 2)
+                if frames:
+                    yield decode(frames)
+        finally:
+            decoder.close()

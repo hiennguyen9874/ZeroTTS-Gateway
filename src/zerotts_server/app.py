@@ -5,14 +5,16 @@ import base64
 import io
 import json
 import logging
+import threading
 import time
 import unicodedata
 import wave
+from collections.abc import AsyncIterator, Callable, Iterator
 from contextlib import asynccontextmanager
 
 import numpy as np
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from zerotts.chunking import chunk_text
 
@@ -36,6 +38,13 @@ MAX_SEGMENT_SEC = 15.0
 class ServerError(Exception):
     def __init__(self, status: int, type_: str, message: str):
         self.status, self.type, self.message = status, type_, message
+
+
+class StreamAborted(Exception):
+    """Raised inside a started raw audio stream: the server drops the connection.
+
+    A raw PCM caller has no error event, so a clean end would look like complete audio.
+    """
 
 
 def error_response(status: int, type_: str, message: str) -> JSONResponse:
@@ -92,6 +101,54 @@ def wav16(pcm: bytes) -> bytes:
         f.setframerate(SAMPLE_RATE)
         f.writeframes(pcm)
     return buffer.getvalue()
+
+
+def sse_event(payload: dict | str) -> bytes:
+    data = payload if isinstance(payload, str) else json.dumps(payload, separators=(",", ":"))
+    return f"data: {data}\n\n".encode()
+
+
+async def iterate_in_thread(make: Callable[[], Iterator]) -> AsyncIterator:
+    """Run a blocking iterator in its own thread, handing items to the event loop.
+
+    When the consumer stops (the caller disconnected), the thread stops after the item in
+    progress and closes the iterator, so the engine is freed instead of synthesizing on.
+    """
+    loop = asyncio.get_running_loop()
+    queue: asyncio.Queue = asyncio.Queue()
+    stop = threading.Event()
+    end = object()
+
+    def put(item) -> None:
+        try:
+            loop.call_soon_threadsafe(queue.put_nowait, item)
+        except RuntimeError:  # the event loop is gone (shutdown)
+            stop.set()
+
+    def run() -> None:
+        items = None
+        try:
+            items = iter(make())
+            for item in items:
+                if stop.is_set():
+                    break
+                put(item)
+            put(end)
+        except Exception as exc:
+            put(exc)
+        finally:
+            close = getattr(items, "close", None)
+            if close:
+                close()
+
+    threading.Thread(target=run, daemon=True).start()
+    try:
+        while (item := await queue.get()) is not end:
+            if isinstance(item, Exception):
+                raise item
+            yield item
+    finally:
+        stop.set()
 
 
 def split_segments(text: str) -> list[str]:
@@ -170,10 +227,10 @@ def create_app(settings: Settings, engine: Engine | None = None) -> FastAPI:
                     "object": "model",
                     "owned_by": "engine",
                     "family": "zerotts",
-                    "mode": "offline",
+                    "mode": model.mode,
                     "loaded": loaded,
                 }
-                for model_id in settings.models
+                for model_id, model in settings.models.items()
             ],
         }
 
@@ -208,11 +265,37 @@ def create_app(settings: Settings, engine: Engine | None = None) -> FastAPI:
         if not isinstance(text, str) or not text.strip():
             raise ServerError(400, "invalid_request_error", "'input' must be a non-empty string")
         check_supported(body)
-        response_format = body.get("response_format") or "wav"
-        if response_format not in ("wav", "pcm", "json", "b64_json"):
+        streaming = body.get("stream_format") is not None or body.get("stream") is True
+        if streaming and model.mode != "streaming":
             raise ServerError(
-                400, "invalid_request_error", "response_format must be wav, pcm or json"
+                400,
+                "invalid_request_error",
+                "speech streaming requires a model configured with mode=streaming",
             )
+        if not streaming and model.mode == "streaming":
+            raise ServerError(
+                400, "invalid_request_error", "this model only streams; set stream_format"
+            )
+        if streaming:
+            stream_format = body.get("stream_format") or "sse"
+            if stream_format not in ("sse", "audio"):
+                raise ServerError(
+                    400,
+                    "invalid_request_error",
+                    "streaming speech stream_format must be sse or audio",
+                )
+            if (body.get("response_format") or "pcm") != "pcm":
+                raise ServerError(
+                    400,
+                    "invalid_request_error",
+                    "streaming speech currently supports response_format=pcm",
+                )
+        else:
+            response_format = body.get("response_format") or "wav"
+            if response_format not in ("wav", "pcm", "json", "b64_json"):
+                raise ServerError(
+                    400, "invalid_request_error", "response_format must be wav, pcm or json"
+                )
         seed = read_seed(body)
         require_ready()
         voice = body.get("voice")
@@ -228,6 +311,13 @@ def create_app(settings: Settings, engine: Engine | None = None) -> FastAPI:
         )
 
         start = time.perf_counter()
+        if streaming:
+            return stream_speech(
+                lambda: engine.synthesize(segments, voice, seed, model.sampling, stream=True),
+                stream_format == "sse",
+                fields,
+                start,
+            )
         try:
             pcm = await asyncio.to_thread(
                 lambda: b"".join(
@@ -262,6 +352,58 @@ def create_app(settings: Settings, engine: Engine | None = None) -> FastAPI:
     return app
 
 
+def stream_speech(
+    synthesize: Callable[[], Iterator[np.ndarray]], sse: bool, fields: dict, start: float
+) -> StreamingResponse:
+    """audio.cpp's streamed speech: SSE events, or raw PCM over chunked transfer."""
+
+    async def body():
+        samples = 0
+        ttfa_ms = None
+        try:
+            async for chunk in iterate_in_thread(synthesize):
+                pcm = pcm16(chunk)
+                if not pcm:
+                    continue
+                if ttfa_ms is None:
+                    ttfa_ms = fields["ttfa_ms"] = elapsed_ms(start)
+                samples += len(pcm) // 2
+                if sse:
+                    yield sse_event(
+                        {"type": "speech.audio.delta", "audio": base64.b64encode(pcm).decode()}
+                    )
+                else:
+                    yield pcm
+            if ttfa_ms is None:
+                raise RuntimeError("engine produced no audio")
+        except Exception as exc:
+            fields.update(engine_error=type(exc).__name__, error="server_error")
+            if not sse:
+                raise StreamAborted("synthesis failed mid-stream") from None
+            # audio.cpp ends a failed SSE stream with an error event, without done or [DONE].
+            yield sse_event(
+                {"type": "error", "error": {"message": "synthesis failed", "type": "server_error"}}
+            )
+            return
+        finally:
+            wall_ms = elapsed_ms(start)
+            audio_ms = round(samples / SAMPLE_RATE * 1000, 1)
+            fields.update(
+                synth_ms=wall_ms,
+                audio_ms=audio_ms,
+                rtf=round(wall_ms / audio_ms, 3) if audio_ms else 0.0,
+            )
+        if sse:
+            yield sse_event({"type": "speech.audio.done", "timing": {"ttft_ms": ttfa_ms}})
+            yield sse_event("[DONE]")
+
+    if sse:
+        return StreamingResponse(
+            body(), media_type="text/event-stream", headers={"X-Accel-Buffering": "no"}
+        )
+    return StreamingResponse(body(), media_type="audio/pcm")
+
+
 async def read_body(request: Request) -> dict:
     try:
         body = json.loads(await request.body())
@@ -281,8 +423,6 @@ def check_supported(body: dict) -> None:
         # 1 is accepted as omitted, as audio.cpp does for models without speed support.
         if speed is not None and (isinstance(speed, bool) or speed != 1):
             raise ServerError(400, "unsupported_option", f"'{key}' other than 1 is not supported")
-    if body.get("stream_format") is not None or body.get("stream") is True:
-        raise ServerError(400, "unsupported_option", "streaming is not supported by this model")
     options = body.get("options")
     if options is not None and not isinstance(options, dict):
         raise ServerError(400, "invalid_request_error", "'options' must be an object")

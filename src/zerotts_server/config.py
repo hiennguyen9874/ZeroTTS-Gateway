@@ -27,11 +27,21 @@ class Sampling:
     audio_repetition_penalty: float = 1.2
 
 
+MODES = ("offline", "streaming")
+
+
 @dataclass(frozen=True)
 class ModelConfig:
     # Used when the caller sends no `voice`; never the model's unstable null voice (ADR 0005).
     default_voice: str = "maichi"
     sampling: Sampling = field(default_factory=Sampling)
+    # As audio.cpp's entry `mode`: "streaming" models answer only stream requests, and the
+    # other way round.
+    mode: str = "offline"
+
+    def __post_init__(self):
+        if self.mode not in MODES:
+            raise ValueError(f"model mode must be one of {MODES}")
 
 
 @dataclass(frozen=True)
@@ -44,7 +54,12 @@ class Settings:
     threads: int = 8
     host: str = "127.0.0.1"
     port: int = 8080
-    models: Mapping[str, ModelConfig] = field(default_factory=lambda: {"zerotts": ModelConfig()})
+    models: Mapping[str, ModelConfig] = field(
+        default_factory=lambda: {
+            "zerotts": ModelConfig(),
+            "zerotts-stream": ModelConfig(mode="streaming"),
+        }
+    )
 
     @property
     def voices_path(self) -> Path:

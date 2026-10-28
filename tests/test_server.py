@@ -9,10 +9,13 @@ import time
 import unicodedata
 import wave
 
+import httpx
 import numpy as np
 import pytest
 from fastapi.testclient import TestClient
 
+from zerotts_gateway import create_app as create_gateway
+from zerotts_gateway.config import Settings as GatewaySettings
 from zerotts_server import create_app, load_settings
 from zerotts_server.config import ModelConfig, Sampling, Settings
 from zerotts_server.engine import VoiceInfo
@@ -35,7 +38,12 @@ def pcm16(chunks) -> bytes:
 
 
 class FakeEngine:
-    """Yields `chunks` once per segment; records each call. load() blocks until `loaded` is set."""
+    """Yields `chunks` once per segment; records each call. load() blocks until `loaded` is set.
+
+    `error` is raised after `fail_after` chunks. `delay` sleeps before each chunk; `gate`, when
+    set to an Event, holds the run after the first chunk until it is set. `finished` is set when
+    a run yields everything, `closed` when a run ends either way.
+    """
 
     def __init__(self, voices=VOICES, chunks=CHUNKS, fail_load=False):
         self._voices, self.chunks, self.fail_load = voices, chunks, fail_load
@@ -43,6 +51,11 @@ class FakeEngine:
         self.loaded.set()
         self.calls = []
         self.error = None
+        self.fail_after = 0
+        self.delay = 0.0
+        self.gate = None
+        self.finished = threading.Event()
+        self.closed = threading.Event()
 
     def load(self):
         self.loaded.wait(5)
@@ -52,14 +65,30 @@ class FakeEngine:
     def voices(self):
         return self._voices
 
-    def synthesize(self, segments, voice, seed, sampling):
+    def synthesize(self, segments, voice, seed, sampling, stream=False):
         self.calls.append(
-            {"segments": list(segments), "voice": voice, "seed": seed, "sampling": sampling}
+            {
+                "segments": list(segments),
+                "voice": voice,
+                "seed": seed,
+                "sampling": sampling,
+                "stream": stream,
+            }
         )
-        if self.error:
-            raise self.error
-        for _ in segments:
-            yield from self.chunks
+        sent = 0
+        try:
+            for _ in segments:
+                for chunk in self.chunks:
+                    if self.error and sent == self.fail_after:
+                        raise self.error
+                    time.sleep(self.delay)
+                    yield chunk
+                    sent += 1
+                    if sent == 1 and self.gate is not None:
+                        assert self.gate.wait(5), "test never opened the gate"
+            self.finished.set()
+        finally:
+            self.closed.set()
 
 
 def wait_for_health(client):
@@ -293,8 +322,6 @@ def test_default_voice_missing_from_voice_dir_fails_load(make_client):
         {"options": {"temperature": 0.5}},
         {"options": {"seed": 1, "cfg_scale": 2.0}},
         {"options": {"instruct": "x"}},
-        {"stream_format": "sse"},
-        {"stream": True},
     ],
 )
 def test_unsupported_options_are_400(client, engine, extra):
@@ -379,10 +406,11 @@ def test_models_lists_zerotts(client):
 
     assert response.status_code == 200
     assert response.json()["object"] == "list"
-    [model] = response.json()["data"]
-    assert model["id"] == "zerotts"
-    assert model["mode"] == "offline"
-    assert model["loaded"] is True
+    models = {model["id"]: model for model in response.json()["data"]}
+    assert set(models) == {"zerotts", "zerotts-stream"}
+    assert models["zerotts"]["mode"] == "offline"
+    assert models["zerotts-stream"]["mode"] == "streaming"
+    assert all(model["loaded"] is True for model in models.values())
 
 
 def test_health_is_503_until_warmup_finishes(make_client, engine):
@@ -476,3 +504,213 @@ def test_logs_carry_no_text_or_audio(client, engine, caplog):
     assert "Xin" not in logged and "chào" not in logged
     # Only short scalar values: no audio bytes or base64.
     assert all(len(str(v)) < 64 for fields in (ok, failed) for v in fields.values())
+
+
+# --- streaming (zerotts-stream) ----------------------------------------------
+
+
+def stream_body(**extra):
+    return {"model": "zerotts-stream", "input": TEXT, "stream_format": "sse", **extra}
+
+
+def sse_events(data: bytes) -> list:
+    """Parse an SSE body into its `data:` payloads; JSON objects decoded, [DONE] kept as is."""
+    assert data.endswith(b"\n\n")
+    events = []
+    for block in data.decode().split("\n\n")[:-1]:
+        assert block.startswith("data: ")
+        payload = block.removeprefix("data: ")
+        events.append(payload if payload == "[DONE]" else json.loads(payload))
+    return events
+
+
+def joined_deltas(events) -> bytes:
+    return b"".join(base64.b64decode(e["audio"]) for e in events[:-2])
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [{}, {"response_format": "pcm"}, {"stream_format": None, "stream": True}],
+    ids=["sse", "sse-pcm", "stream-true"],
+)
+def test_sse_stream_has_audiocpp_events_and_engine_audio(client, engine, extra):
+    response = client.post(SPEECH, json=stream_body(**extra))
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+    assert response.headers["x-accel-buffering"] == "no"
+    events = sse_events(response.content)
+    assert [e["type"] for e in events[:-2]] == ["speech.audio.delta"] * len(CHUNKS)
+    assert events[-2]["type"] == "speech.audio.done"
+    assert events[-2]["timing"]["ttft_ms"] >= 0
+    assert events[-1] == "[DONE]"
+    assert joined_deltas(events) == pcm16(CHUNKS)
+    assert [(c["segments"], c["stream"]) for c in engine.calls] == [([TEXT], True)]
+
+
+def test_audio_stream_format_returns_raw_pcm(client, engine):
+    response = client.post(SPEECH, json=stream_body(stream_format="audio", response_format="pcm"))
+
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "audio/pcm"
+    assert response.content == pcm16(CHUNKS)
+    assert engine.calls[0]["stream"] is True
+
+
+def test_long_text_streams_every_segment_with_one_done(client, engine):
+    text = " ".join(SENTENCES)
+
+    events = sse_events(client.post(SPEECH, json=stream_body(input=text, seed=9)).content)
+
+    [call] = engine.calls
+    assert len(call["segments"]) > 1 and " ".join(call["segments"]) == text
+    assert call["seed"] == 9
+    assert [e if e == "[DONE]" else e["type"] for e in events].count("speech.audio.done") == 1
+    assert joined_deltas(events) == pcm16(CHUNKS * len(call["segments"]))
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        pytest.param(speech_body(stream_format="sse"), id="sse-to-offline"),
+        pytest.param(speech_body(stream=True), id="stream-true-to-offline"),
+        pytest.param(stream_body(stream_format=None), id="offline-to-stream"),
+        pytest.param(stream_body(stream_format=None, response_format="wav"), id="wav-to-stream"),
+        pytest.param(stream_body(stream_format="webrtc"), id="unknown-stream-format"),
+        pytest.param(stream_body(response_format="wav"), id="stream-wav"),
+        pytest.param(stream_body(stream_format="audio", response_format="mp3"), id="stream-mp3"),
+    ],
+)
+def test_stream_and_model_mode_mismatch_is_400(client, engine, body):
+    assert_error(client.post(SPEECH, json=body), 400, "invalid_request_error")
+    assert engine.calls == []
+
+
+def test_stream_validates_like_offline(client, engine):
+    assert_error(client.post(SPEECH, json=stream_body(voice="nobody")), 400, "unknown_voice")
+    assert_error(client.post(SPEECH, json=stream_body(speed=1.5)), 400, "unsupported_option")
+    assert_error(client.post(SPEECH, json=stream_body(seed=-1)), 400, "invalid_request_error")
+    assert engine.calls == []
+
+
+@pytest.mark.parametrize("fail_after", [0, 1])
+def test_engine_failure_ends_sse_with_error_event(client, engine, caplog, fail_after):
+    caplog.set_level(logging.INFO, logger="zerotts_server")
+    engine.error, engine.fail_after = RuntimeError(f"choked on {TEXT}"), fail_after
+
+    response = client.post(SPEECH, json=stream_body())
+
+    assert response.status_code == 200
+    events = sse_events(response.content)
+    assert [e["type"] for e in events] == ["speech.audio.delta"] * fail_after + ["error"]
+    assert events[-1]["error"]["type"] == "server_error"
+    assert "Xin" not in response.text
+    [record] = [r for r in caplog.records if r.getMessage() == "request"]
+    assert (record.fields["engine_error"], record.fields["error"]) == (
+        "RuntimeError",
+        "server_error",
+    )
+
+
+def test_stream_log_has_ttfa_and_rtf_without_text(client, caplog):
+    caplog.set_level(logging.INFO, logger="zerotts_server")
+    client.post(SPEECH, json=stream_body(stream_format="audio"))
+
+    [record] = [r for r in caplog.records if r.getMessage() == "request"]
+    fields = record.fields
+    assert (fields["status"], fields["model"], fields["segments"]) == (200, "zerotts-stream", 1)
+    assert {"ttfa_ms", "synth_ms", "audio_ms", "rtf"} <= set(fields)
+    assert fields["audio_ms"] == pytest.approx(len(pcm16(CHUNKS)) / 2 / 48, 0.01)
+    assert "Xin" not in json.dumps(fields, ensure_ascii=False)
+
+
+# Streaming over real HTTP: TestClient buffers whole bodies.
+
+
+@pytest.fixture
+def live_server(engine, serve):
+    def start(**overrides) -> str:
+        base = serve(create_app(Settings(**overrides), engine=engine))
+        deadline = time.monotonic() + 5
+        while httpx.get(base + "/health").status_code != 200:
+            assert time.monotonic() < deadline, "server did not finish loading"
+            time.sleep(0.01)
+        return base
+
+    return start
+
+
+def test_first_delta_arrives_before_engine_finishes(live_server, engine):
+    engine.gate = threading.Event()
+    base = live_server()
+
+    with httpx.stream("POST", base + SPEECH, json=stream_body(), timeout=5) as response:
+        lines = response.iter_lines()
+        first = json.loads(next(lines).removeprefix("data: "))
+        assert first["type"] == "speech.audio.delta"
+        assert base64.b64decode(first["audio"]) == pcm16(CHUNKS[:1])
+        assert not engine.finished.is_set()
+        engine.gate.set()
+        rest = [line for line in lines if line]
+
+    assert json.loads(rest[-2].removeprefix("data: "))["type"] == "speech.audio.done"
+    assert rest[-1] == "data: [DONE]"
+    assert engine.finished.is_set()
+
+
+def test_engine_failure_aborts_raw_audio_stream(live_server, engine):
+    engine.error, engine.fail_after = RuntimeError("boom"), 1
+    base = live_server()
+    received = b""
+
+    with (
+        pytest.raises(httpx.RemoteProtocolError),
+        httpx.stream(
+            "POST", base + SPEECH, json=stream_body(stream_format="audio"), timeout=5
+        ) as response,
+    ):
+        assert response.status_code == 200
+        for chunk in response.iter_raw():
+            received += chunk
+
+    assert received == pcm16(CHUNKS[:1])
+
+
+def test_caller_disconnect_stops_the_engine(live_server, engine):
+    engine.chunks, engine.delay = [np.zeros(480, dtype=np.float32)] * 100, 0.05  # about 5 s
+    base = live_server()
+
+    with httpx.stream("POST", base + SPEECH, json=stream_body(), timeout=5) as response:
+        next(response.iter_lines())
+
+    assert engine.closed.wait(2)
+    assert not engine.finished.is_set()
+
+
+@pytest.mark.parametrize("extra", [{}, {"stream_format": "audio"}], ids=["sse", "audio"])
+def test_gateway_passes_the_stream_through_unchanged(live_server, serve, engine, extra):
+    base = live_server()
+    gateway = serve(create_gateway(GatewaySettings(upstream_url=base)))
+    body = stream_body(input="Xin chào.", **extra)
+
+    direct = httpx.post(base + SPEECH, json=body, timeout=5)
+    via_gateway = httpx.post(gateway + SPEECH, json=body, timeout=5)
+
+    assert via_gateway.status_code == direct.status_code == 200
+    assert via_gateway.headers["content-type"] == direct.headers["content-type"]
+    if extra:
+        assert via_gateway.content == direct.content == pcm16(CHUNKS)
+    else:
+        assert joined_deltas(sse_events(via_gateway.content)) == pcm16(CHUNKS)
+        assert sse_events(via_gateway.content)[-1] == "[DONE]"
+    assert [call["stream"] for call in engine.calls] == [True, True]
+
+
+def test_gateway_forwards_mode_mismatch_400(live_server, serve):
+    gateway = serve(create_gateway(GatewaySettings(upstream_url=live_server())))
+
+    assert_error(
+        httpx.post(gateway + SPEECH, json=speech_body(stream_format="sse"), timeout=5),
+        400,
+        "invalid_request_error",
+    )
