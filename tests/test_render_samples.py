@@ -19,7 +19,7 @@ from pathlib import Path
 import httpx
 import pytest
 
-from zerotts_gateway.config import ModelDefaults, ShortTextSpeedBand
+from zerotts_gateway.config import ModelDefaults
 
 from .conftest import ScriptedStream
 
@@ -109,7 +109,16 @@ def run(live_gateway, live_upstream, upstream, tmp_path):
         out = out or tmp_path / "out"
         command = [sys.executable, str(SCRIPT), "--gateway", gateway, "--upstream", live_upstream]
         return subprocess.run(
-            [*command, "--out", str(out), *args],
+            [
+                *command,
+                "--model",
+                "g-omnivoice",
+                "--voice",
+                "vieneu_v3_Mai_Anh",
+                "--out",
+                str(out),
+                *args,
+            ],
             capture_output=True,
             text=True,
             timeout=300,
@@ -414,38 +423,6 @@ def test_renders_listening_set_with_questions_and_clone_sides(run, upstream, tmp
     assert "reference_text (normalized): chào mừng đến với" in page
     assert "reference_text (verbatim): Chào mừng đến với" in page
     assert "Q5" in page
-
-
-def test_clone_and_case_controls_override_operator_speed_bands(
-    live_gateway, live_upstream, upstream, tmp_path
-):
-    upstream.on("GET", "/v1/models", lambda r: httpx.Response(200, json=MODELS))
-    upstream.on("POST", SPEECH, speaker(lambda body: [pcm((0.5, 1000))]))
-    gateway = live_gateway(
-        models={
-            "g-omnivoice": ModelDefaults(
-                language="vi", short_text_speed_bands=(ShortTextSpeedBand(12, 0.6),)
-            )
-        }
-    )
-    result = subprocess.run(
-        [
-            sys.executable, str(SCRIPT), "--gateway", gateway, "--upstream", live_upstream,
-            "--set", "listening", "--id", "clone-doan-trang", "--id", "tag-case-upper",
-            "--id", "tag-case-lower", "--out", str(tmp_path),
-        ],
-        capture_output=True, text=True, timeout=300, env=script_env(),
-    )  # fmt: skip
-    assert result.returncode == 0, result.stderr
-    sent = [json.loads(r.content) for r in upstream.calls("POST", SPEECH)]
-    assert len(sent) == 6
-    assert all(b["speed"] == 1.0 for b in sent)
-    assert sent[0]["input"] == sent[1]["input"] == "Xin chào các bạn [laughter]."
-    assert sent[2]["input"] == sent[3]["input"] == "xin chào các bạn [laughter]."
-    assert sent[4]["input"] == sent[5]["input"]
-    assert sent[4]["voice_ref"] == sent[5]["voice_ref"]
-    assert all(r["requested_speed"] == "1.0" for r in read_rows(tmp_path))
-    assert "controlled speed: 1.0 (both sides)" in (tmp_path / "index.html").read_text("utf-8")
 
 
 def test_filters_listening_set_by_question(run, upstream, tmp_path):

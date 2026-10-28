@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Run render_samples.py for every (case set, model, voice) and build one summary.
 
-Needs audio.cpp and the gateway running (see docs/LISTENING.md). Defaults: both case sets, every
-TTS model in the gateway's /v1/models, every voices/*.wav that has a line in voices/prompt_text.
+Needs zerotts_server and the gateway running (see docs/LISTENING.md). Defaults: both case sets,
+every TTS model in /v1/models and its available voices.
 
   uv run python scripts/render_all.py                                  # everything
-  uv run python scripts/render_all.py --set listening --model g-omnivoice --voice vieneu_v3_Mai_Anh
+  uv run python scripts/render_all.py --set listening --model zerotts --voice maichi
   uv run python scripts/render_all.py --out outputs/render-all-001     # rerun resumes
   uv run python scripts/render_all.py --dry-run                        # print the plan only
   # listen: python -m http.server -d outputs/render-all-001 9000
@@ -322,10 +322,10 @@ def write_reports(out: Path, rows: list[dict], manifests: list[dict], runs: dict
         else "<p>No ASR scores (set OMNIVOICE_ASR_URL to score runs).</p>"
     )
     (out / "index.html").write_text(
-        f"""<!doctype html><meta charset="utf-8"><title>OmniVoice render-all</title>
+        f"""<!doctype html><meta charset="utf-8"><title>ZeroTTS render-all</title>
 <style>body{{font-family:sans-serif;margin:1em}}table{{border-collapse:collapse}}
 td,th{{border:1px solid #ccc;padding:4px 8px}}.bad{{color:#b00;font-weight:bold}}</style>
-<h1>OmniVoice render-all</h1>
+<h1>ZeroTTS render-all</h1>
 <p>{len(manifests)} runs · {len(rows)} rows · <a href="summary.csv">summary.csv</a> ·
 <a href="all_results.csv">all_results.csv</a> · <a href="voices.csv">voices.csv</a> ·
 <a href="cases.csv">cases.csv</a></p>

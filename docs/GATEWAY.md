@@ -1,6 +1,6 @@
 # Chạy và cấu hình gateway
 
-Gateway đứng trước upstream (`zerotts_server`, hoặc audio.cpp chạy OmniVoice cho tới #11) và giữ nguyên API kiểu audio.cpp: caller chỉ đổi base URL. Spec: issue #1. Chạy `zerotts_server`: [ZEROTTS_SERVER.md](ZEROTTS_SERVER.md); audio.cpp: [INSTALL.md](INSTALL.md), [USAGE.md](USAGE.md).
+Gateway đứng trước upstream `zerotts_server` và giữ API kiểu audio.cpp. Spec: issue #1. Chạy upstream: [ZEROTTS_SERVER.md](ZEROTTS_SERVER.md).
 
 ## Chạy trực tiếp
 
@@ -36,11 +36,11 @@ Body lỗi theo dạng của audio.cpp: `{"error":{"message","type"}}`.
 - `connect_timeout_s`: giới hạn riêng cho bước kết nối upstream; quá thì caller nhận `502 upstream_unavailable` và `/ready` trả 503.
 - `max_input_chars`: quá thì trả `400 text_too_long`.
 - `lexicon_path`: từ điển phát âm ([TEXT_PIPELINE.md](TEXT_PIPELINE.md#từ-điển-phát-âm)).
-- `[models.<id>]`: mặc định theo model: `language`, `normalize`, `nonverbal_tags` (`false` thì gỡ non-verbal tag, [TEXT_PIPELINE.md](TEXT_PIPELINE.md)), `short_text_speed_bands` / `short_text_speed`, tuỳ chọn thêm `short_text_speed_ramp` ([ADR 0004](adr/0004-short-text-speed.md)). Model không có trong config vẫn được forward.
+- `[models.<id>]`: mặc định theo model: `language`, `normalize`, `nonverbal_tags` (`false` thì gỡ non-verbal tag, [TEXT_PIPELINE.md](TEXT_PIPELINE.md)), theo cấu hình của model. Model không có trong config vẫn được forward.
 
 ## Chạy bằng Docker
 
-Container chỉ chứa gateway. Upstream chạy trên host, ở máy riêng, hoặc trong container riêng cùng compose (`compose.zerotts.yaml` + `compose.zerotts-stack.yaml`; audio.cpp: `compose.audiocpp.yaml` + `compose.stack.yaml`): xem [DEPLOY.md](DEPLOY.md). Phần dưới là cách chỉ chạy gateway (`COMPOSE_FILE=compose.yaml`, mặc định).
+Container chỉ chứa gateway. Upstream chạy trên host, ở máy riêng, hoặc trong container riêng cùng compose (`compose.zerotts.yaml` + `compose.zerotts-stack.yaml`): xem [DEPLOY.md](DEPLOY.md). Phần dưới là cách chỉ chạy gateway (`COMPOSE_FILE=compose.yaml`, mặc định).
 
 ```bash
 cp .env.example .env        # sửa ZEROTTS_GATEWAY_UPSTREAM_URL, ZEROTTS_GATEWAY_API_KEY

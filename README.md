@@ -1,70 +1,34 @@
 # ZeroTTS Gateway
 
-Gateway mỏng đứng trước audio.cpp chạy OmniVoice. Gateway giữ nguyên API của audio.cpp (`/v1/audio/speech`, `/v1/models`, `/v1/audio/voices`), nên caller chỉ cần đổi base URL. Gateway thêm:
-
-- chuẩn hoá văn bản tiếng Việt trước khi gửi lên model (số, ngày, tiền, viết tắt, markdown, …);
-- Bearer auth tuỳ chọn, chặn `voice_ref` dạng đường dẫn, `/ready` kiểm tra upstream;
-- log không chứa văn bản hay audio.
-
-Gateway không tự sinh audio, không chia/ghép, không retry, không xếp hàng. Spec: issue #1.
+Gateway mỏng đứng trước upstream `zerotts_server` (ZeroTTS trên CPU), cung cấp API kiểu audio.cpp. Gateway chuẩn hoá văn bản tiếng Việt, hỗ trợ Bearer auth, chặn đường dẫn `voice_ref`, kiểm tra upstream qua `/ready` và không ghi text hay audio vào log. Gateway không tổng hợp, chia đoạn, retry hay xếp hàng.
 
 ## Bắt đầu nhanh
 
-**0. Lấy mã nguồn tham chiếu** (audio.cpp, sea-g2p, … là git submodule trong `references/`):
-
 ```bash
-git submodule update --init
-```
-
-Không cần `--recursive`: submodule lồng của audio.cpp chỉ chứa server frontend tuỳ chọn (MP3/FLAC), WebUI đã build sẵn trong source ([docs/INSTALL.md](docs/INSTALL.md#2-lấy-source)).
-
-**1. Chạy audio.cpp** (build: [docs/INSTALL.md](docs/INSTALL.md); model và server: [docs/USAGE.md](docs/USAGE.md)):
-
-```bash
-references/audio.cpp/build/linux-cuda126-release/bin/audiocpp_server --config configs/server.json --no-ui
-```
-
-**2. Chạy gateway** (cổng 8000, upstream `http://127.0.0.1:8080`):
-
-```bash
+uv sync
+uv run scripts/download_zerotts.sh
+uv run zerotts-server --config configs/zerotts_server.toml
+# Trong terminal khác:
 uv run zerotts-gateway --config configs/gateway.toml
+curl -f localhost:8000/ready
+curl --fail-with-body localhost:8000/v1/audio/speech -H 'Content-Type: application/json' -o out.wav \
+  -d '{"model":"zerotts","input":"Hẹn gặp lúc 8h30 ngày 25/12, phí 50k.","voice":"maichi"}'
 ```
 
-Hoặc bằng Docker: `cp .env.example .env && docker compose up -d --build`. Mặc định chỉ chạy gateway; chạy cả `zerotts_server` (hoặc audio.cpp) trong Docker thì đặt `COMPOSE_FILE` trong `.env` (xem [docs/DEPLOY.md](docs/DEPLOY.md)).
+Docker và cấu hình từng cách triển khai: [docs/DEPLOY.md](docs/DEPLOY.md). Đặt `ZEROTTS_GATEWAY_API_KEY` để yêu cầu Bearer auth (trừ `/health`, `/ready`).
 
-**3. Gọi API** như gọi audio.cpp:
+## Ghi chú chuyển đổi từ OmniVoice
 
-```bash
-curl localhost:8000/ready   # 200 khi tới được upstream
-
-curl -s --fail-with-body localhost:8000/v1/audio/speech -H 'Content-Type: application/json' -o out.wav \
-  -d '{"model":"g-omnivoice","input":"Hẹn gặp lúc 8h30 ngày 25/12, phí 50k.","voice":"vieneu_v3_Kim_Thanh"}'
-
-# Xem văn bản thật sự gửi lên model (không gọi upstream)
-curl -s localhost:8000/v1/text/normalize -H 'Content-Type: application/json' \
-  -d '{"input":"Hẹn gặp lúc 8h30 ngày 25/12, phí 50k.","language":"vi"}'
-```
-
-Đặt `ZEROTTS_GATEWAY_API_KEY` thì mọi route trừ `/health`, `/ready` cần header `Authorization: Bearer <key>`. Tắt chuẩn hoá cho một request: thêm `"text_processing": {"normalize": false}`.
-
-## Chọn model và giọng
-
-Mặc định nên dùng `g-omnivoice` + `vieneu_v3_Kim_Thanh`; đoạn dài cần phát sớm dùng `g-omnivoice-stream`. `configs/server.json` chỉ khai báo hai entry này; các model khác (`omnivoice-vietnamese`, `omnivoice`) cần thêm lại vào config theo [docs/USAGE.md, mục 4.1.1](docs/USAGE.md#411-thêm-lại-các-model-đã-bỏ). Lý do và giới hạn: [docs/MODEL_VOICE_RECOMMENDATIONS.md](docs/MODEL_VOICE_RECOMMENDATIONS.md).
+- Đổi model sang `zerotts` (offline) hoặc `zerotts-stream` (streaming); đổi voice sang tên voice pack ZeroTTS, ví dụ `maichi`. Voice mặc định do operator cấu hình. Xem [khuyến nghị](docs/MODEL_VOICE_RECOMMENDATIONS.md).
+- Audio là mono **48 kHz**, thay cho 24 kHz; caller PCM thô phải cập nhật sample rate.
+- `voice_ref`, `reference_text`, `instruct`/`instructions`, `speed`/`speaking_rate` khác 1 và các khóa `options` ngoài `seed` bị từ chối với `400 unsupported_option`. ZeroTTS không clone giọng. `speed: 1` vẫn được chấp nhận.
+- Lệnh và biến gateway nay là `zerotts-gateway` và `ZEROTTS_GATEWAY_*`. Xem [hợp đồng server](docs/ZEROTTS_SERVER.md#route) cho định dạng và giới hạn đầy đủ.
 
 ## Tài liệu
 
-| Tài liệu | Nội dung |
-| --- | --- |
-| [docs/INSTALL.md](docs/INSTALL.md) | Build audio.cpp với CUDA 12.6 trên A100 |
-| [docs/USAGE.md](docs/USAGE.md) | Convert checkpoint sang GGUF, CLI, server audio.cpp, voice clone/design, API |
-| [docs/GATEWAY.md](docs/GATEWAY.md) | Chạy gateway, biến môi trường, route, config, Docker |
-| [docs/ZEROTTS_SERVER.md](docs/ZEROTTS_SERVER.md) | Chạy `zerotts_server` (upstream ZeroTTS): weights, config, route, option bị từ chối |
-| [docs/DEPLOY.md](docs/DEPLOY.md) | Triển khai Docker: chỉ gateway, chỉ upstream (`zerotts_server` hoặc audio.cpp), hoặc cả hai |
-| [docs/TEXT_PIPELINE.md](docs/TEXT_PIPELINE.md) | Text pipeline, cảnh báo và mã lỗi, từ điển phát âm, thêm ca regression |
-| [docs/LISTENING.md](docs/LISTENING.md) | Render mẫu nghe thử A/B, bộ câu nghe, chấm bằng ASR, chạy mọi model × giọng |
-| [docs/MODEL_VOICE_RECOMMENDATIONS.md](docs/MODEL_VOICE_RECOMMENDATIONS.md) | Đánh giá model, giọng và khuyến nghị sử dụng |
-| [docs/adr/](docs/adr/) | Quyết định thiết kế |
-| [docs/reports/](docs/reports/) | Báo cáo các lượt nghe và đo |
+- [Gateway](docs/GATEWAY.md), [upstream ZeroTTS](docs/ZEROTTS_SERVER.md), [triển khai Docker](docs/DEPLOY.md)
+- [Text pipeline](docs/TEXT_PIPELINE.md), [nghe thử và ASR](docs/LISTENING.md)
+- [Quyết định thiết kế](docs/adr/), [báo cáo](docs/reports/)
 
 ## Test
 

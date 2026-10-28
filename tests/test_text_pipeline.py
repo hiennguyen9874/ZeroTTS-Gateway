@@ -149,7 +149,7 @@ def test_normalize_requires_auth_when_key_set(make_client):
 
 def test_default_lexicon_forwards_input_and_reference_text(configured_client, upstream):
     body = {
-        "model": "g-omnivoice",
+        "model": "zerotts",
         "input": "Mua iPhone 15.",
         "reference_text": "Tôi dùng iPad và Google.",
         "instructions": "Speak naturally.",
@@ -400,8 +400,6 @@ def test_speech_warning_header_once_each_in_detection_order(client):
         # ZeroTTS: tags removed with a warning, then the full pipeline (#9).
         ("zerotts", "xin chào, các bạn.", "omitted_nonverbal_tag"),
         ("zerotts-stream", "xin chào, các bạn.", "omitted_nonverbal_tag"),
-        # Tag-aware model: tags reach the upstream intact and no warning is added.
-        ("g-omnivoice", "xin chào [laughter], các bạn [B EY1 S].", None),
     ],
 )
 def test_speech_tags_follow_model_config(configured_client, upstream, model, sent_text, warnings):
@@ -412,8 +410,7 @@ def test_speech_tags_follow_model_config(configured_client, upstream, model, sen
     assert response.status_code == 200
     sent = upstream.last_json()
     assert sent["input"] == sent_text
-    # ZeroTTS models have no short_text_speed; the shipped OmniVoice bands still apply.
-    assert ("speed" in sent) == (model == "g-omnivoice")
+    assert "speed" not in sent
     assert response.headers.get("x-text-warnings") == warnings
 
 

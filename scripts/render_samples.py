@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Render cases for a listening run: gateway (A) vs audio.cpp direct (B), with metrics.
+"""Render cases for a listening run: gateway (A) vs upstream direct (B), with metrics.
 
-Needs a running audio.cpp server and a gateway in front of it (docs/LISTENING.md, docs/USAGE.md):
+Needs a running zerotts_server and a gateway in front of it (docs/LISTENING.md):
 
   uv run python scripts/render_samples.py --out outputs/listen-001
-  uv run python scripts/render_samples.py --model g-omnivoice-stream --group numbers-money
+  uv run python scripts/render_samples.py --model zerotts-stream --group numbers-money
   uv run python scripts/render_samples.py --no-direct --id plain-vi --overwrite
   uv run python scripts/render_samples.py --set listening --question 3 --out outputs/q3
   # listen: python -m http.server -d outputs/listen-001 9000
@@ -268,12 +268,12 @@ def parse_args() -> argparse.Namespace:
     )
     ap.add_argument("--gateway", default="http://127.0.0.1:8000")
     ap.add_argument(
-        "--upstream", default="http://127.0.0.1:8080", help="audio.cpp, for the direct (B) side"
+        "--upstream", default="http://127.0.0.1:8080", help="upstream for the direct (B) side"
     )
     ap.add_argument("--no-direct", action="store_true", help="only render through the gateway")
     ap.add_argument("--api-key", help="gateway Bearer key, if set")
-    ap.add_argument("--model", default="g-omnivoice")
-    ap.add_argument("--voice", default="vieneu_v3_Mai_Anh")
+    ap.add_argument("--model", default="zerotts")
+    ap.add_argument("--voice", default="maichi")
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument(
         "--set",
@@ -308,7 +308,7 @@ def parse_args() -> argparse.Namespace:
         "--normalize-on",
         action="store_true",
         help="send text_processing.normalize=true for every case, overriding the case and the"
-        ' model default ("normalize": false in cases, normalize = false for ZeroTTS)',
+        ' model default ("normalize": false in cases)',
     )
     ap.add_argument(
         "--asr-url",

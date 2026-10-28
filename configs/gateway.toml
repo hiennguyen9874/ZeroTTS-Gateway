@@ -28,34 +28,3 @@ nonverbal_tags = false
 [models.zerotts-stream]
 language = "vi"
 nonverbal_tags = false
-
-# OmniVoice models (removed in #11).
-# configs/server.json ships only g-omnivoice and g-omnivoice-stream; the other sections apply once their upstream entries
-# are added back (docs/USAGE.md, section 4.1.1).
-#
-# short_text_speed_bands (off unless set, ADR 0004): ascending inclusive syllable bounds.
-# Use the first matching band; above the last bound no speed is added. Caller `speed` and
-# options.duration_sec/duration always win. Count engine text, excluding non-verbal tags.
-# Keep 0.7 up to 8 syllables (#18); 0.6 covers the remaining 9-syllable greeting (#19) without
-# further slowing the shortest lists. Measurements/limitations: docs/adr/0004-short-text-speed.md.
-# Alternative: short_text_speed = 0.7 with short_text_max_syllables = 12 (scalar form, unchanged).
-# Do not combine the scalar and band forms.
-#
-# short_text_speed_ramp (off unless set, issue #22): linear speed between two inclusive engine-text
-# syllable bounds, used when the short form above chose no speed; must start above its last bound.
-# Not enabled here: listen for repeated/extra words at 13-24 syllables and pass the vietvoice-lab
-# 2x2 A/B (#147) first. To try it, add to a model section:
-#   short_text_speed_ramp = { from_syllables = 13, to_syllables = 24, from_speed = 0.6, to_speed = 1.0 }
-[models.g-omnivoice]
-language = "vi"
-short_text_speed_bands = [{ max_syllables = 8, speed = 0.7 }, { max_syllables = 12, speed = 0.6 }]
-
-[models.g-omnivoice-stream]
-language = "vi"
-short_text_speed_bands = [{ max_syllables = 8, speed = 0.7 }, { max_syllables = 12, speed = 0.6 }]
-
-[models.omnivoice-vietnamese]
-language = "vi"
-
-[models.omnivoice]
-normalize = false

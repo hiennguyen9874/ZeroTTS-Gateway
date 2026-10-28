@@ -1,6 +1,6 @@
 # Gateway only; points at an upstream running elsewhere. Variables come from .env (see .env.example).
 # zerotts_server in Docker as well: compose.zerotts.yaml (+ compose.zerotts-stack.yaml on the same
-# host). OmniVoice on audio.cpp, until #11: compose.audiocpp.yaml (+ compose.stack.yaml).
+# host).
 services:
   gateway:
     build: .

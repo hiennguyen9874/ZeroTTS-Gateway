@@ -1,5 +1,4 @@
-# Gateway only; the upstream is a separate image (docker/zerotts_server.Dockerfile,
-# docker/audiocpp.Dockerfile) or runs elsewhere.
+# Gateway only; zerotts_server is a separate image or runs elsewhere.
 # Config and lexicon are mounted at /config (compose.yaml).
 FROM python:3.12-slim
 
