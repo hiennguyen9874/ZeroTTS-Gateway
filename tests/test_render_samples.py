@@ -4,7 +4,6 @@ The script runs as a subprocess against a live gateway and a live fake upstream 
 so the observable behaviour is its exit code, console output and output directory.
 """
 
-import base64
 import csv
 import io
 import json
@@ -26,16 +25,16 @@ from .conftest import ScriptedStream
 ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = ROOT / "scripts" / "render_samples.py"
 GOLDEN = json.loads((ROOT / "tests" / "golden" / "pipeline.json").read_text("utf-8"))
-# The tests render OmniVoice models, so goldens bound to another model are left out.
+# Goldens bound to a specific model are covered separately.
 AUDIO_CASES = [case for case in GOLDEN if "error" not in case and "model" not in case]
 LISTENING = json.loads((ROOT / "scripts" / "listening_cases.json").read_text("utf-8"))
 SPEECH = "/v1/audio/speech"
-RATE = 24000
+RATE = 48000
 MODELS = {
     "object": "list",
     "data": [
-        {"id": "g-omnivoice", "object": "model", "task": "tts", "mode": "offline"},
-        {"id": "g-omnivoice-stream", "object": "model", "task": "tts", "mode": "streaming"},
+        {"id": "zerotts", "object": "model", "task": "tts", "mode": "offline"},
+        {"id": "zerotts-stream", "object": "model", "task": "tts", "mode": "streaming"},
     ],
 }
 # zerotts_server's /v1/models, and the gateway's ZeroTTS defaults (configs/gateway.toml).
@@ -112,9 +111,9 @@ def run(live_gateway, live_upstream, upstream, tmp_path):
             [
                 *command,
                 "--model",
-                "g-omnivoice",
+                "zerotts",
                 "--voice",
-                "vieneu_v3_Mai_Anh",
+                "maichi",
                 "--out",
                 str(out),
                 *args,
@@ -187,23 +186,22 @@ def read_rows(out: Path) -> list[dict]:
         return list(csv.DictReader(f))
 
 
-@pytest.mark.parametrize(
-    ("model", "streaming"), [("g-omnivoice", False), ("g-omnivoice-stream", True)]
-)
+@pytest.mark.parametrize(("model", "streaming"), [("zerotts", False), ("zerotts-stream", True)])
 def test_renders_golden_set_for_listening(run, upstream, tmp_path, model, streaming):
     audio = pcm((0.2, 0), (1.0, 16384), (0.2, 0))
     upstream.on("POST", SPEECH, speaker(lambda body: odd_chunks(audio)))
     out = tmp_path / "out"
 
-    result = run("--model", model, "--voice", "vieneu_v3_Mai_Anh", "--seed", "7")
+    result = run("--model", model, "--voice", "maichi", "--seed", "7")
 
     assert result.returncode == 0, result.stderr
     rows = read_rows(out)
+    cases = [c for c in GOLDEN if "error" not in c and c.get("model", model) == model]
     assert [(r["case_id"], r["side"]) for r in rows] == [
-        (case["id"], side) for case in AUDIO_CASES for side in ("gateway", "direct")
+        (case["id"], side) for case in cases for side in ("gateway", "direct")
     ]
     warnings = {case["id"]: ",".join(case["warnings"]) for case in AUDIO_CASES}
-    by_id = {case["id"]: case for case in AUDIO_CASES}
+    by_id = {case["id"]: case for case in cases}
     for row in rows:
         assert row["result"] == "audio", row
         assert row["review_result"] == row["reviewer"] == row["notes"] == ""
@@ -214,8 +212,9 @@ def test_renders_golden_set_for_listening(run, upstream, tmp_path, model, stream
         assert (row["clipped_samples"], row["flags"]) == ("0", "")
         assert 0 <= float(row["ttfb_ms"]) <= float(row["total_ms"])
         assert float(row["rtf"]) > 0
-        expected = warnings[row["case_id"]] if row["side"] == "gateway" else ""
-        assert row["text_warnings"] == expected, row["case_id"]
+        if row["case_id"] in warnings:
+            expected = warnings[row["case_id"]] if row["side"] == "gateway" else ""
+            assert row["text_warnings"] == expected, row["case_id"]
         # Each side records the text its request carried: engine text via the gateway, the
         # input text sent straight to the upstream.
         sent = row["engine_text"] if row["side"] == "gateway" else by_id[row["case_id"]]["input"]
@@ -233,9 +232,9 @@ def test_renders_golden_set_for_listening(run, upstream, tmp_path, model, stream
 
     # One upstream request per (case, side), same voice and seed, the format fitting the mode.
     sent = [json.loads(r.content) for r in upstream.calls("POST", SPEECH)]
-    assert len(sent) == 2 * len(AUDIO_CASES)
+    assert len(sent) == 2 * len(cases)
     for body in sent:
-        assert (body["model"], body["voice"], body["seed"]) == (model, "vieneu_v3_Mai_Anh", 7)
+        assert (body["model"], body["voice"], body["seed"]) == (model, "maichi", 7)
         if streaming:
             assert (body["response_format"], body["stream_format"]) == ("pcm", "audio")
         else:
@@ -247,17 +246,17 @@ def test_renders_golden_set_for_listening(run, upstream, tmp_path, model, stream
     assert manifest["pipeline_version"] == version["pipeline_version"]
     assert (manifest["model"], manifest["voice"], manifest["seed"]) == (
         model,
-        "vieneu_v3_Mai_Anh",
+        "maichi",
         7,
     )
     assert manifest["mode"] == ("streaming" if streaming else "offline")
-    assert manifest["cases"] == len(AUDIO_CASES)
+    assert manifest["cases"] == len(cases)
     assert manifest["asr"] is None
     assert re.fullmatch(r"[0-9a-f]{40}(-dirty)?", manifest["git_commit"])
     datetime.fromisoformat(manifest["started_utc"])
 
     page = (out / "index.html").read_text("utf-8")
-    for case in AUDIO_CASES:
+    for case in cases:
         assert f'src="{case["id"]}.gateway.wav"' in page
         assert f'src="{case["id"]}.direct.wav"' in page
     assert "ttfb" in page
@@ -299,7 +298,7 @@ def test_stream_broken_mid_way_is_recorded_without_a_truncated_file(run, upstrea
     )
     out = tmp_path / "out"
 
-    result = run("--model", "g-omnivoice-stream", "--id", "plain-vi")
+    result = run("--model", "zerotts-stream", "--id", "plain-vi")
 
     assert result.returncode == 1
     rows = read_rows(out)
@@ -335,27 +334,22 @@ def test_refuses_output_dir_with_data_unless_overwrite(run, upstream, tmp_path):
     assert (out / "plain-vi.gateway.wav").exists()
 
 
-def test_listening_set_covers_the_five_questions():
+def test_listening_set_covers_the_questions():
     ids = [case["id"] for case in LISTENING]
     assert len(ids) == len(set(ids))
     for case in LISTENING:
         assert case["input"].strip() and case["why"].strip() and case["review_focus"].strip()
-        assert set(case["questions"]) <= {1, 2, 3, 4, 5}, case["id"]
+        assert set(case["questions"]) <= {1, 2, 3, 4}, case["id"]
     groups = {case["group"] for case in LISTENING}
-    assert {"hard", "abbrev-case", "long-text", "tags", "clone"} <= groups
-    assert {q for case in LISTENING for q in case["questions"]} == {1, 2, 3, 4, 5}
+    assert {"hard", "abbrev-case", "long-text", "tags"} <= groups
+    assert {q for case in LISTENING for q in case["questions"]} == {1, 2, 3, 4}
     # Long enough for at least 30 s of audio and several streaming chunks.
     for case in LISTENING:
         if case["group"] == "long-text":
             assert 600 <= len(case["input"]) <= 800, case["id"]
-    transcripts = (ROOT / "voices" / "prompt_text").read_text("utf-8")
-    for case in LISTENING:
-        if "clone" in case:
-            assert (ROOT / "voices" / f"{case['clone']}.wav").exists()
-            assert f"{case['clone']}|" in transcripts
 
 
-def test_renders_listening_set_with_questions_and_clone_sides(run, upstream, tmp_path):
+def test_renders_listening_set_with_questions(run, upstream, tmp_path):
     audio = pcm((0.1, 0), (0.5, 8000), (0.1, 0))
     upstream.on("POST", SPEECH, speaker(lambda body: [audio]))
     out = tmp_path / "out"
@@ -373,96 +367,52 @@ def test_renders_listening_set_with_questions_and_clone_sides(run, upstream, tmp
         assert row["result"] == "audio", row
         assert row["questions"] == ",".join(map(str, case["questions"]))
         assert row["review_focus"] == case["review_focus"]
-        expected = (
-            ("normalized" if row["side"] == "gateway" else "verbatim") if "clone" in case else ""
-        )
-        assert row["reference_text"] == expected, row["case_id"]
-        # Clone direct side sends the gateway's engine text, so both sides sent the same input.
-        sent = row["engine_text"] if row["side"] == "gateway" or "clone" in case else case["input"]
+        sent = row["engine_text"] if row["side"] == "gateway" else case["input"]
         assert row["sent_text"] == sent, row["case_id"]
 
     manifest = json.loads((out / "manifest.json").read_text("utf-8"))
     assert manifest["case_set"] == "listening"
     assert manifest["questions"] == {
-        str(q): [case["id"] for case in LISTENING if q in case["questions"]] for q in range(1, 6)
+        str(q): [case["id"] for case in LISTENING if q in case["questions"]] for q in range(1, 5)
     }
-    assert manifest["groups"]["clone"] == [c["id"] for c in LISTENING if "clone" in c]
-
-    # Clone: same reference audio, seed and model input on both sides; only reference_text differs.
     sent = [json.loads(r.content) for r in upstream.calls("POST", SPEECH)]
-    clones = [body for body in sent if "voice_ref" in body]
-    clone_cases = [c for c in LISTENING if "clone" in c]
-    assert len(clones) == 2 * len(clone_cases)
-    engine = {r["case_id"]: r["engine_text"] for r in rows}
-    for i, case in enumerate(clone_cases):
-        via_gateway, direct = clones[2 * i : 2 * i + 2]
-        voice_wav = base64.b64encode(
-            (ROOT / "voices" / f"{case['clone']}.wav").read_bytes()
-        ).decode()
-        for body in (via_gateway, direct):
-            assert body["voice_ref"] == {"type": "base64", "data": voice_wav}
-            assert "voice" not in body
-            assert (body["seed"], body["input"], body["speed"]) == (3, engine[case["id"]], 1.0)
-        normalized = httpx.post(
-            run.gateway + "/v1/text/normalize",
-            json={"input": direct["reference_text"], "language": "vi"},
-        ).json()["engine_text"]
-        assert via_gateway["reference_text"] == normalized
-    for case in LISTENING:
-        if "speed" in case:
-            pair = [b for b, r in zip(sent, rows, strict=True) if r["case_id"] == case["id"]]
-            assert [b["speed"] for b in pair] == [case["speed"], case["speed"]]
-            assert all(
-                r["requested_speed"] == str(case["speed"])
-                for r in rows
-                if r["case_id"] == case["id"]
-            )
-    assert all(body["voice"] == "vieneu_v3_Mai_Anh" for body in sent if "voice_ref" not in body)
-
-    page = (out / "index.html").read_text("utf-8")
-    assert "reference_text (normalized): chào mừng đến với" in page
-    assert "reference_text (verbatim): Chào mừng đến với" in page
-    assert "Q5" in page
+    assert all(body["voice"] == "maichi" and "voice_ref" not in body for body in sent)
 
 
 def test_filters_listening_set_by_question(run, upstream, tmp_path):
     upstream.on("POST", SPEECH, speaker(lambda body: [pcm((0.5, 1000))]))
 
-    result = run("--set", "listening", "--question", "3", "--question", "5", "--no-direct")
+    result = run("--set", "listening", "--question", "3", "--question", "4", "--no-direct")
 
     assert result.returncode == 0, result.stderr
     assert [r["case_id"] for r in read_rows(tmp_path / "out")] == [
-        case["id"] for case in LISTENING if {3, 5} & set(case["questions"])
+        case["id"] for case in LISTENING if {3, 4} & set(case["questions"])
     ]
 
 
-def test_render_all_runs_every_voice_once_and_clone_cases_once_per_model(
+def test_render_all_runs_every_voice_once_per_model(
     live_gateway, live_upstream, upstream, tmp_path
 ):
     upstream.on("GET", "/v1/models", lambda r: httpx.Response(200, json=MODELS))
     upstream.on("POST", SPEECH, speaker(lambda body: [pcm((0.5, 1000))]))
     gateway = live_gateway()
     out = tmp_path / "all"
-    voices = ["vieneu_v3_Mai_Anh", "vieneu_v3_Duc_Tri"]
+    voices = ["maichi", "quangminh"]
     command = [
         sys.executable, str(ROOT / "scripts" / "render_all.py"), "--gateway", gateway,
-        "--upstream", live_upstream, "--set", "listening", "--model", "g-omnivoice",
+        "--upstream", live_upstream, "--set", "listening", "--model", "zerotts",
         "--no-direct", "--out", str(out), *(a for v in voices for a in ("--voice", v)),
     ]  # fmt: skip
 
     result = subprocess.run(command, capture_output=True, text=True, timeout=300)
 
     assert result.returncode == 0, result.stderr
-    clone_ids = [c["id"] for c in LISTENING if "clone" in c]
-    voiced_ids = [c["id"] for c in LISTENING if "clone" not in c]
+    voiced_ids = [c["id"] for c in LISTENING]
     for voice in voices:
-        rows = read_rows(out / "listening" / "g-omnivoice" / voice)
+        rows = read_rows(out / "listening" / "zerotts" / voice)
         assert [r["case_id"] for r in rows] == voiced_ids
-    assert [r["case_id"] for r in read_rows(out / "listening" / "g-omnivoice" / "_clone")] == (
-        clone_ids
-    )
     sent = [json.loads(r.content) for r in upstream.calls("POST", SPEECH)]
-    assert len(sent) == 2 * len(voiced_ids) + len(clone_ids)
+    assert len(sent) == 2 * len(voiced_ids)
     with (out / "all_results.csv").open(encoding="utf-8", newline="") as f:
         assert len(list(csv.DictReader(f))) == len(sent)
     assert (out / "summary.csv").exists() and (out / "index.html").exists()
@@ -555,14 +505,12 @@ def test_normalize_false_cases_are_marked_and_can_render_as_production(run, upst
 def test_render_all_summarizes_missing_words_by_voice_and_case(
     live_gateway, live_upstream, upstream, asr, tmp_path
 ):
-    # Voices are told apart at the ASR by audio length: Duc_Tri gets longer audio.
+    # Voices are told apart at the ASR by audio length: quangminh gets longer audio.
     upstream.on("GET", "/v1/models", lambda r: httpx.Response(200, json=MODELS))
     upstream.on(
         "POST",
         SPEECH,
-        speaker(
-            lambda body: [pcm((1.0 if body.get("voice") == "vieneu_v3_Duc_Tri" else 0.5, 1000))]
-        ),
+        speaker(lambda body: [pcm((1.0 if body.get("voice") == "quangminh" else 0.5, 1000))]),
     )
     gateway = live_gateway()
     engine = {
@@ -576,8 +524,8 @@ def test_render_all_summarizes_missing_words_by_voice_and_case(
 
     def answer(request: dict) -> str:
         case_id = request["filename"].split(".")[0]
-        duc_tri = request["size"] > 36000
-        if case_id == "hard-short-a" or (case_id == "tag-control" and duc_tri):
+        quangminh = request["size"] > 72000
+        if case_id == "hard-short-a" or (case_id == "tag-control" and quangminh):
             return ""
         return engine[case_id]
 
@@ -585,9 +533,9 @@ def test_render_all_summarizes_missing_words_by_voice_and_case(
     out = tmp_path / "all"
     command = [
         sys.executable, str(ROOT / "scripts" / "render_all.py"), "--gateway", gateway,
-        "--upstream", live_upstream, "--set", "listening", "--model", "g-omnivoice",
-        "--no-direct", "--out", str(out), "--voice", "vieneu_v3_Mai_Anh",
-        "--voice", "vieneu_v3_Duc_Tri",
+        "--upstream", live_upstream, "--set", "listening", "--model", "zerotts",
+        "--no-direct", "--out", str(out), "--voice", "maichi",
+        "--voice", "quangminh",
     ]  # fmt: skip
 
     result = subprocess.run(
@@ -598,14 +546,13 @@ def test_render_all_summarizes_missing_words_by_voice_and_case(
     assert result.returncode == 0, result.stderr
     with (out / "voices.csv").open(encoding="utf-8", newline="") as f:
         voices = {r["voice"]: r for r in csv.DictReader(f)}
-    voiced = sum("clone" not in c for c in LISTENING)
+    voiced = len(LISTENING)
     assert {v: (r["asr_scored"], r["words_missing"]) for v, r in voices.items()} == {
-        "vieneu_v3_Mai_Anh": (str(voiced), "1"),
-        "vieneu_v3_Duc_Tri": (str(voiced), "2"),
-        "_clone": (str(len(LISTENING) - voiced), "0"),
+        "maichi": (str(voiced), "1"),
+        "quangminh": (str(voiced), "2"),
     }
-    assert float(voices["vieneu_v3_Mai_Anh"]["mean_word_recall"]) > float(
-        voices["vieneu_v3_Duc_Tri"]["mean_word_recall"]
+    assert float(voices["maichi"]["mean_word_recall"]) > float(
+        voices["quangminh"]["mean_word_recall"]
     )
     with (out / "cases.csv").open(encoding="utf-8", newline="") as f:
         cases = {r["case_id"]: r for r in csv.DictReader(f)}
@@ -621,7 +568,7 @@ def test_render_all_summarizes_missing_words_by_voice_and_case(
 
     console = result.stdout
     by_voice = console[console.index("by voice") : console.index("by case")]
-    assert by_voice.index("vieneu_v3_Mai_Anh") < by_voice.index("vieneu_v3_Duc_Tri")
+    assert by_voice.index("maichi") < by_voice.index("quangminh")
     assert re.search(r"hard-short-a\s+2/2 ALL", console)
     assert re.search(r"tag-control\s+1/2\n", console)
     page = (out / "index.html").read_text("utf-8")
@@ -647,8 +594,7 @@ def test_zerotts_stream_renders_48k_without_clone_cases(
 
     assert result.returncode == 0, result.stderr
     rows = read_rows(out)
-    # ZeroTTS cannot clone, so clone cases are not rendered and nothing sends voice_ref.
-    voiced = [c["id"] for c in LISTENING if "clone" not in c]
+    voiced = [c["id"] for c in LISTENING]
     assert [r["case_id"] for r in rows] == [i for i in voiced for _ in ("gateway", "direct")]
     for row in rows:
         assert row["result"] == "audio", row
@@ -706,7 +652,7 @@ def test_render_all_takes_zerotts_voices_from_the_upstream_and_plans_no_clone_ru
 
     assert result.returncode == 0, result.stderr
     assert sorted(p.name for p in (out / "listening" / "zerotts").iterdir()) == ["a", "b"]
-    voiced = [c["id"] for c in LISTENING if "clone" not in c]
+    voiced = [c["id"] for c in LISTENING]
     for voice in ("a", "b"):
         rows = read_rows(out / "listening" / "zerotts" / voice)
         assert [r["case_id"] for r in rows] == voiced

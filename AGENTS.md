@@ -24,7 +24,6 @@ A thin **gateway** in front of a TTS **upstream**. The upstream is `zerotts_serv
 - `docs/TEXT_PIPELINE.md`: text pipeline behaviour, pronunciation lexicon, adding golden cases.
 - `docs/LISTENING.md`: `render_samples.py`/`render_all.py` listening runs, ASR scoring, output format, and the ZeroTTS text pipeline A/B (`scripts/ab_report.py`).
 - `docs/MODEL_VOICE_RECOMMENDATIONS.md`: model/voice evaluation and recommended defaults.
-- `scripts/sample_voices.py`: samples Vietnamese HF datasets into `voices_candidates/` and installs picked voices into `voices/`.
 
 ## References
 

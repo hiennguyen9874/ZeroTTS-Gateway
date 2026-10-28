@@ -1,6 +1,6 @@
 # Nghe thử ZeroTTS
 
-Chạy `zerotts_server` và gateway theo [ZEROTTS_SERVER.md](ZEROTTS_SERVER.md) và [GATEWAY.md](GATEWAY.md). `render_samples.py` so sánh gateway (A) với upstream trực tiếp (B), cùng model, voice và seed. Các ca clone cũ được bỏ qua vì ZeroTTS không hỗ trợ clone.
+Chạy `zerotts_server` và gateway theo [ZEROTTS_SERVER.md](ZEROTTS_SERVER.md) và [GATEWAY.md](GATEWAY.md). `render_samples.py` so sánh gateway (A) với upstream trực tiếp (B), cùng model, voice và seed.
 
 ```bash
 uv run python scripts/render_samples.py --model zerotts --voice maichi --out outputs/listen-001

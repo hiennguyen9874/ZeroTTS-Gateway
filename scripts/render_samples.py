@@ -12,10 +12,7 @@ Needs a running zerotts_server and a gateway in front of it (docs/LISTENING.md):
 Case sets: "golden" (default) is the regression golden set minus error cases and cases bound to
 another model; "listening" (scripts/listening_cases.json) is the listening-only set for the open
 questions of issue #7.
-Same model, voice and seed for both sides, so differences come from the text pipeline. Clone cases
-("clone": voice) send that voice's WAV from voices/ as base64 with its transcript from
-voices/prompt_text as reference_text: the gateway side normalizes it, the direct side sends it
-verbatim with the gateway's engine text as input, so only reference_text differs. Output:
+Same model, voice and seed for both sides, so differences come from the text pipeline. Output:
 
   <case>.<side>.wav   PCM s16le mono, written via a temp file then renamed
   results.csv         one row per (case, side): metrics, flags, text warnings, blank review columns
@@ -23,8 +20,7 @@ verbatim with the gateway's engine text as input, so only reference_text differs
   index.html          players side by side with metrics and flags
 
 Streaming models (mode "streaming" in /v1/models) are called with stream_format=audio and
-response_format=pcm so TTFB is real; offline models return WAV. For the zerotts family
-(zerotts_server) streamed PCM is 48 kHz and clone cases are skipped, since ZeroTTS cannot clone.
+response_format=pcm so TTFB is real; offline models return WAV. Streamed PCM is 48 kHz.
 --normalize-on sends text_processing.normalize=true on every case, for pipeline A/B runs. A
 request is never retried once it is sent; a stream that breaks after audio arrived is recorded as
 stream_aborted and no file is kept. Flags are hints for the listener, not a quality verdict. The
@@ -44,9 +40,7 @@ from __future__ import annotations
 
 import argparse
 import array
-import base64
 import csv
-import functools
 import html
 import io
 import json
@@ -69,11 +63,9 @@ CASE_SETS = {
     "golden": ROOT / "tests" / "golden" / "pipeline.json",
     "listening": ROOT / "scripts" / "listening_cases.json",
 }
-VOICES = ROOT / "voices"
 
 SILENCE_LEVEL = 328  # ~-40 dBFS on s16
 CLIP_LEVEL = 32767
-OMNIVOICE_RATE = 24000
 ZEROTTS_RATE = 48000
 RECALL_THRESHOLD = 0.8
 # Not words to hear: non-verbal tags ("[laughter]") and CMU pronunciation spans ("[B EY1 S]").
@@ -81,8 +73,8 @@ UNSPOKEN = re.compile(r"\[[a-z]+(?:-[a-z]+)?\]|\[[A-Z]+[0-2]?(?: [A-Z]+[0-2]?)*\
 WORD = re.compile(r"[^\W_]+")
 REPORTS = ("results.csv", "manifest.json", "index.html")
 CSV_FIELDS = [
-    "case_id", "group", "questions", "side", "normalize", "reference_text", "result",
-    "requested_speed", "http_status", "file", "duration_s", "ttfb_ms", "total_ms", "rtf",
+    "case_id", "group", "questions", "side", "normalize", "result", "http_status", "file",
+    "duration_s", "ttfb_ms", "total_ms", "rtf",
     "peak_dbfs", "rms_dbfs",
     "lead_silence_ms", "trail_silence_ms", "clipped_samples", "flags", "word_recall",
     "text_warnings", "known_issue", "review_focus", "input", "engine_text", "sent_text",
@@ -97,7 +89,6 @@ class Sample:
     engine_text: str  # the gateway's engine text, the intended reading for both sides
     sent_text: str = ""  # the input text this side's request carried to the model
     normalize: bool | None = None  # text_processing.normalize sent to the gateway, if any
-    reference_text: str = ""  # clone cases: the reference_text the model received
     result: str = "audio"  # "audio" or a failure code
     http_status: int | None = None
     file: str = ""
@@ -143,11 +134,7 @@ def main() -> int:
         sys.exit(f"model {args.model!r} is not in the upstream's /v1/models")
     mode = entry.get("mode")
     streaming = mode == "streaming"
-    zerotts = entry.get("family") == "zerotts"
-    if zerotts:
-        # ZeroTTS has no voice encoder: zerotts_server rejects voice_ref (ADR 0005).
-        cases = [c for c in cases if "clone" not in c]
-    sample_rate = args.sample_rate or (ZEROTTS_RATE if zerotts else OMNIVOICE_RATE)
+    sample_rate = args.sample_rate or ZEROTTS_RATE
     if not cases:
         sys.exit(f"no matching {args.case_set} cases")
     prepare_out(args.out, args.overwrite)
@@ -173,18 +160,7 @@ def main() -> int:
             "seed": args.seed,
             "language": case.get("language", "vi"),
         }
-        # Experimental controls must be identical on both sides. In clone pairs, an explicit
-        # speed disables gateway speed bands so only reference_text normalization differs.
-        if "speed" in case or "clone" in case:
-            body["speed"] = case.get("speed", 1.0)
-        if "clone" in case:
-            audio_b64, reference = clone_reference(case["clone"])
-            body |= {
-                "voice_ref": {"type": "base64", "data": audio_b64},
-                "reference_text": reference,
-            }
-        else:
-            body["voice"] = args.voice
+        body["voice"] = args.voice
         body |= (
             {"response_format": "pcm", "stream_format": "audio"}
             if streaming
@@ -196,20 +172,9 @@ def main() -> int:
         )
         engine = normalize(gateway, {**body, **processing})
         for side, client in sides:
-            reference = ""
-            if side == "gateway":
-                payload = {**body, **processing}
-                if "clone" in case:
-                    reference = normalize(gateway, {**payload, "input": body["reference_text"]})
-            elif "clone" in case:
-                # Same model input on both sides, so the only difference is reference_text.
-                payload = {**body, "input": engine}
-                reference = body["reference_text"]
-            else:
-                payload = body
-            # The gateway side's model input is the engine text; the direct side's is its input.
+            payload = {**body, **processing} if side == "gateway" else body
             sent = engine if side == "gateway" else payload["input"]
-            sample = Sample(case, side, engine, sent, normalize_flag, reference)
+            sample = Sample(case, side, engine, sent, normalize_flag)
             audio = synthesize(client, payload, sample, streaming, sample_rate)
             if audio:
                 sample.file = f"{case['id']}.{side}.wav"
@@ -288,7 +253,7 @@ def parse_args() -> argparse.Namespace:
         "--question",
         type=int,
         action="append",
-        choices=range(1, 6),
+        choices=range(1, 5),
         help="only cases for these issue #7 questions (repeatable)",
     )
     ap.add_argument("--out", type=Path, default=ROOT / "outputs" / "samples")
@@ -300,8 +265,7 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument(
         "--sample-rate",
         type=int,
-        help="rate of streamed PCM, which carries no header (default: 48000 for the zerotts"
-        " family in /v1/models, else 24000 for OmniVoice)",
+        help="rate of streamed PCM, which carries no header (default: 48000)",
     )
     ap.add_argument("--timeout", type=float, default=600, help="per-request read timeout (s)")
     ap.add_argument(
@@ -331,17 +295,6 @@ def parse_args() -> argparse.Namespace:
 
 def normalize(gateway: httpx.Client, body: dict) -> str:
     return gateway.post("/v1/text/normalize", json=body).raise_for_status().json()["engine_text"]
-
-
-@functools.cache
-def clone_reference(voice: str) -> tuple[str, str]:
-    """Base64 WAV of voices/<voice>.wav and its transcript from voices/prompt_text (name|text)."""
-    audio = base64.b64encode((VOICES / f"{voice}.wav").read_bytes()).decode("ascii")
-    for line in (VOICES / "prompt_text").read_text("utf-8").splitlines():
-        name, _, text = line.partition("|")
-        if name.strip() == voice:
-            return audio, text.strip()
-    sys.exit(f"no transcript for voice {voice!r} in {VOICES / 'prompt_text'}")
 
 
 def prepare_out(out: Path, overwrite: bool) -> None:
@@ -531,11 +484,6 @@ def write_csv(path: Path, samples: list[Sample]) -> None:
                     "questions": ",".join(map(str, s.case.get("questions", ()))),
                     "side": s.side,
                     "normalize": "" if s.normalize is None else str(s.normalize).lower(),
-                    "reference_text": (
-                        "" if "clone" not in s.case
-                        else "normalized" if s.side == "gateway" else "verbatim"
-                    ),
-                    "requested_speed": s.case.get("speed", 1.0 if "clone" in s.case else ""),
                     "result": s.result,
                     "http_status": s.http_status or "",
                     "file": s.file,
@@ -579,12 +527,8 @@ def render_html(samples: list[Sample], manifest: dict) -> str:
     sides = manifest["sides"]
 
     def cell(s: Sample) -> str:
-        reference = ""
-        if "clone" in s.case:
-            kind = "normalized" if s.side == "gateway" else "verbatim"
-            reference = f'<div class="muted">reference_text ({kind}): {e(s.reference_text)}</div>'
         if s.result != "audio":
-            return f'<td class="bad">{e(s.result)}{reference}</td>'
+            return f'<td class="bad">{e(s.result)}</td>'
         m = s.metrics
         info = (
             f"{m['duration_s']}s · ttfb {s.ttfb_ms or 0:.0f} ms · total {s.total_ms:.0f} ms"
@@ -611,7 +555,7 @@ def render_html(samples: list[Sample], manifest: dict) -> str:
             )
         return (
             f'<td><audio controls preload="none" src="{e(s.file)}"></audio>{asr}'
-            f'<div class="muted">{e(info)}</div>{flags}{warnings}{sent}{reference}</td>'
+            f'<div class="muted">{e(info)}</div>{flags}{warnings}{sent}</td>'
         )
 
     by_case: dict[str, dict[str, Sample]] = {}
@@ -636,9 +580,6 @@ def render_html(samples: list[Sample], manifest: dict) -> str:
                 else '<div class="warn">normalize: false (tests cleanup only, so symbols such as'
                 " @ &lt; &gt; reach the model as typed)</div>"
             )
-        control_speed = c.get("speed", 1.0 if "clone" in c else None)
-        if control_speed is not None:
-            normalize += f'<div class="muted">controlled speed: {control_speed} (both sides)</div>'
         focus = (
             f"<div><b>listen for:</b> {e(c['review_focus'])}</div>" if c.get("review_focus") else ""
         )

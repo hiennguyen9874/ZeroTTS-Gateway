@@ -13,8 +13,6 @@ every TTS model in /v1/models and its available voices.
 Layout under --out:
 
   <set>/<model>/<voice>/   one render_samples.py run (WAVs, results.csv, manifest.json, index.html)
-  <set>/<model>/_clone/    groups made only of clone cases ("clone": voice): they carry their own
-                           reference audio, so they run once per model instead of once per voice
   all_results.csv          every results.csv row, prefixed with set, model, voice, run
   summary.csv              per (set, model, side): counts, flagged, words_missing, mean word_recall,
                            median rtf / ttfb / duration
@@ -26,9 +24,9 @@ Layout under --out:
   runs.json                each run's exit code and directory
   index.html               links to every run's page with its counts
 
-Models run in the outer loop so audio.cpp (max_loaded_models) loads each model once. A run whose
-directory already has manifest.json is skipped unless --overwrite; a directory left half-written
-by an interrupted run is re-rendered. A failing run is recorded and the next one still starts.
+A run whose directory already has manifest.json is skipped unless --overwrite; a directory left
+half-written by an interrupted run is re-rendered. A failing run is recorded and the next one
+still starts.
 Exit status is 1 when any run failed. ASR scoring (OMNIVOICE_ASR_* env, see render_samples.py) is
 passed through to every run; without it the word_recall columns stay blank.
 """
@@ -54,8 +52,6 @@ CASE_SETS = {
     "golden": ROOT / "tests" / "golden" / "pipeline.json",
     "listening": ROOT / "scripts" / "listening_cases.json",
 }
-VOICES = ROOT / "voices"
-CLONE_RUN = "_clone"
 
 
 def main() -> int:
@@ -63,18 +59,11 @@ def main() -> int:
     headers = {"authorization": f"Bearer {args.api_key}"} if args.api_key else {}
     families = gateway_models(args.gateway, headers)
     models = args.model or list(families)
-    voices = {}
-    for model in models:
-        # ZeroTTS voices are the upstream's preset packs; OmniVoice ones are voices/*.wav.
-        if args.voice:
-            voices[model] = args.voice
-        elif families.get(model) == "zerotts":
-            voices[model] = gateway_voices(args.gateway, headers)
-        else:
-            voices[model] = library_voices()
+    available_voices = args.voice or gateway_voices(args.gateway, headers)
+    voices = {model: available_voices for model in models}
     if not models or not all(voices.values()):
         sys.exit("no models or no voices to render")
-    plan = build_plan(args.set or list(CASE_SETS), models, voices, families)
+    plan = build_plan(args.set or list(CASE_SETS), models, voices)
     print(f"{len(plan)} runs: sets={args.set or list(CASE_SETS)} models={models}"
           f" voices={sum(map(len, voices.values()))} -> {args.out}", flush=True)  # fmt: skip
     if args.dry_run:
@@ -98,8 +87,7 @@ def main() -> int:
         ]  # fmt: skip
         if args.sample_rate:
             command += ["--sample-rate", str(args.sample_rate)]
-        if run["voice"] != CLONE_RUN:
-            command += ["--voice", run["voice"]]
+        command += ["--voice", run["voice"]]
         for group in run["groups"]:
             command += ["--group", group]
         if args.api_key:
@@ -139,7 +127,9 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--no-direct", action="store_true", help="only render through the gateway")
     ap.add_argument("--set", action="append", choices=CASE_SETS, help="case sets (repeatable)")
     ap.add_argument("--model", action="append", help="models (repeatable; default: all TTS)")
-    ap.add_argument("--voice", action="append", help="voices (repeatable; default: all in voices/)")
+    ap.add_argument(
+        "--voice", action="append", help="voices (repeatable; default: all upstream voices)"
+    )
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--timeout", type=float, default=600, help="per-request read timeout (s)")
     ap.add_argument(
@@ -172,40 +162,17 @@ def gateway_voices(gateway: str, headers: dict) -> list[str]:
     return sorted(data.json()["voices"])
 
 
-def library_voices() -> list[str]:
-    """voices/*.wav with a transcript line in voices/prompt_text (as audio.cpp's voice_dir)."""
-    lines = (VOICES / "prompt_text").read_text("utf-8").splitlines()
-    named = {line.partition("|")[0].strip() for line in lines if "|" in line}
-    voices = sorted(p.stem for p in VOICES.glob("*.wav"))
-    for voice in voices:
-        if voice not in named:
-            print(f"warning: {voice}.wav has no transcript in voices/prompt_text; skipped")
-    return [v for v in voices if v in named]
-
-
-def build_plan(
-    sets: list[str], models: list[str], voices: dict[str, list[str]], families: dict
-) -> list[dict]:
-    split = {}
-    for name in sets:
-        cases = [c for c in json.loads(CASE_SETS[name].read_text("utf-8")) if "error" not in c]
-        groups: dict[str, list[dict]] = {}
-        for case in cases:
-            groups.setdefault(case.get("group", ""), []).append(case)
-        clone = sorted(g for g, cs in groups.items() if all("clone" in c for c in cs))
-        split[name] = (sorted(set(groups) - set(clone)), clone)
+def build_plan(sets: list[str], models: list[str], voices: dict[str, list[str]]) -> list[dict]:
     plan = []
     for model in models:
         for name in sets:
-            voiced, clone = split[name]
-            if voiced:
-                plan += [
-                    {"set": name, "model": model, "voice": v, "groups": voiced}
+            cases = json.loads(CASE_SETS[name].read_text("utf-8"))
+            groups = sorted({c.get("group", "") for c in cases if "error" not in c})
+            if groups:
+                plan.extend(
+                    {"set": name, "model": model, "voice": v, "groups": groups}
                     for v in voices[model]
-                ]
-            # ZeroTTS cannot clone (ADR 0005), so clone-only groups are not planned for it.
-            if clone and families.get(model) != "zerotts":
-                plan.append({"set": name, "model": model, "voice": CLONE_RUN, "groups": clone})
+                )
     return plan
 
 
@@ -393,9 +360,7 @@ def write_table(path: Path, rows: list[dict]) -> None:
 
 def voice_rank(v: dict) -> tuple:
     recall = v["mean_word_recall"]
-    # Clone runs have other cases and no library voice to pick: after the voices.
-    clone = v["voice"] == CLONE_RUN
-    return (v["set"], v["model"], v["side"], clone, v["words_missing"], -(recall or 0), v["voice"])
+    return (v["set"], v["model"], v["side"], v["words_missing"], -(recall or 0), v["voice"])
 
 
 def case_rank(c: dict) -> tuple:
