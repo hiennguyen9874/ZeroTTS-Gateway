@@ -70,3 +70,4 @@ All under `references/` unless a URL.
 
 - `ZeroTTS`: Vietnamese Zero-Shot Text-to-Speech (TTS) with real-time streaming and voice cloning from seconds of audio. Fast, natural, and optimised for CPU inference
 - `ZeroTTS-repo`: github repo of ZeroTTS
+- `ZeroTTS-GGUF`: gguf version
