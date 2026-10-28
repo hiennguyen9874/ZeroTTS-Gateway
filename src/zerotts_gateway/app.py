@@ -288,7 +288,7 @@ def create_app(settings: Settings, transport: httpx.AsyncBaseTransport | None = 
             for name in names:
                 if body.get(name) is not None:
                     body[name], field_warnings = text_pipeline.process(
-                        body[name], vietnamese=vietnamese
+                        body[name], vietnamese=vietnamese, nonverbal_tags=defaults.nonverbal_tags
                     )
                     if name == "input":
                         warnings = field_warnings

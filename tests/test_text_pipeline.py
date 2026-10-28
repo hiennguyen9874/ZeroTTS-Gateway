@@ -20,6 +20,8 @@ GOLDEN = json.loads((Path(__file__).parent / "golden" / "pipeline.json").read_te
 
 def golden_request(case: dict) -> dict:
     body = {"input": case["input"], "language": case.get("language", "vi")}
+    if "model" in case:
+        body["model"] = case["model"]
     if "normalize" in case:
         body["text_processing"] = {"normalize": case["normalize"]}
     return body
@@ -390,6 +392,28 @@ def test_speech_warning_header_once_each_in_detection_order(client):
         response.headers["x-text-warnings"]
         == "omitted_code_block,omitted_html,omitted_url,omitted_emoji"
     )
+
+
+@pytest.mark.parametrize(
+    ("model", "sent_text", "warnings"),
+    [
+        ("zerotts", "Xin chào, các bạn.", "omitted_nonverbal_tag"),
+        ("zerotts-stream", "Xin chào, các bạn.", "omitted_nonverbal_tag"),
+        # Tag-aware model: tags reach the upstream intact and no warning is added.
+        ("g-omnivoice", "xin chào [laughter], các bạn [B EY1 S].", None),
+    ],
+)
+def test_speech_tags_follow_model_config(configured_client, upstream, model, sent_text, warnings):
+    body = {"model": model, "input": "Xin chào [laughter], các bạn [B EY1 S]."}
+
+    response = configured_client.post(SPEECH, json=body)
+
+    assert response.status_code == 200
+    sent = upstream.last_json()
+    assert sent["input"] == sent_text
+    # ZeroTTS models have no short_text_speed; the shipped OmniVoice bands still apply.
+    assert ("speed" in sent) == (model == "g-omnivoice")
+    assert response.headers.get("x-text-warnings") == warnings
 
 
 def test_speech_no_warning_header_without_warnings(client):

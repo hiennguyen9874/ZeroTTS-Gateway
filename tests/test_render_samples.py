@@ -26,7 +26,8 @@ from .conftest import ScriptedStream
 ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = ROOT / "scripts" / "render_samples.py"
 GOLDEN = json.loads((ROOT / "tests" / "golden" / "pipeline.json").read_text("utf-8"))
-AUDIO_CASES = [case for case in GOLDEN if "error" not in case]
+# The tests render OmniVoice models, so goldens bound to another model are left out.
+AUDIO_CASES = [case for case in GOLDEN if "error" not in case and "model" not in case]
 LISTENING = json.loads((ROOT / "scripts" / "listening_cases.json").read_text("utf-8"))
 SPEECH = "/v1/audio/speech"
 RATE = 24000

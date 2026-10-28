@@ -15,6 +15,21 @@ max_input_chars = 5000
 lexicon_path = "lexicon.csv"
 
 # Per-model defaults; model ids not listed here are still forwarded.
+#
+# zerotts / zerotts-stream (zerotts_server, ADR 0005): normalize = false until the #9 A/B decides
+# on the normalizer and lexicon; nonverbal_tags = false because ZeroTTS reads "[laughter]" and CMU
+# phones as words, so the pipeline removes them and warns "omitted_nonverbal_tag".
+[models.zerotts]
+language = "vi"
+normalize = false
+nonverbal_tags = false
+
+[models.zerotts-stream]
+language = "vi"
+normalize = false
+nonverbal_tags = false
+
+# OmniVoice models (removed in #11).
 # configs/server.json ships only g-omnivoice and g-omnivoice-stream; the other sections apply once their upstream entries
 # are added back (docs/USAGE.md, section 4.1.1).
 #

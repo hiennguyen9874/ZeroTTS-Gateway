@@ -9,8 +9,9 @@ Needs a running audio.cpp server and a gateway in front of it (docs/LISTENING.md
   uv run python scripts/render_samples.py --set listening --question 3 --out outputs/q3
   # listen: python -m http.server -d outputs/listen-001 9000
 
-Case sets: "golden" (default) is the regression golden set minus error cases; "listening"
-(scripts/listening_cases.json) is the listening-only set for the open questions of issue #7.
+Case sets: "golden" (default) is the regression golden set minus error cases and cases bound to
+another model; "listening" (scripts/listening_cases.json) is the listening-only set for the open
+questions of issue #7.
 Same model, voice and seed for both sides, so differences come from the text pipeline. Clone cases
 ("clone": voice) send that voice's WAV from voices/ as base64 with its transcript from
 voices/prompt_text as reference_text: the gateway side normalizes it, the direct side sends it
@@ -115,7 +116,12 @@ class Sample:
 
 def main() -> int:
     args = parse_args()
-    cases = [c for c in json.loads(CASE_SETS[args.case_set].read_text("utf-8")) if "error" not in c]
+    # A case bound to another model ("model" in the case) expects that model's pipeline.
+    cases = [
+        c
+        for c in json.loads(CASE_SETS[args.case_set].read_text("utf-8"))
+        if "error" not in c and c.get("model", args.model) == args.model
+    ]
     if args.group:
         cases = [c for c in cases if c.get("group") in args.group]
     if args.id:

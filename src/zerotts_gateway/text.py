@@ -18,7 +18,7 @@ from sea_g2p import Normalizer
 
 # Bump whenever a rule changes so a mis-reading can be traced to the version that produced it.
 # The pipeline version also carries a hash of the lexicon (see Pipeline.version).
-RULES_VERSION = "6"
+RULES_VERSION = "7"
 
 LEXICON_FIELDS = ("word", "replacement", "note")
 
@@ -101,6 +101,10 @@ _PHONE = (
 # One capture group so re.split alternates text segments and protected spans.
 _PROTECTED = re.compile(rf"({_NONVERBAL.pattern}|\[{_PHONE}(?: {_PHONE})*\])")
 _LEADING_PUNCT = re.compile(r"[\s,.;:!?…]*")
+# A tag with the spaces around it and the punctuation right after it, for models without tags.
+_TAG_SPAN = re.compile(rf"\s*{_PROTECTED.pattern}\s*(?P<punct>[,.;:!?…]*)")
+_PUNCT_END = ",.;:!?…"
+_CLOSING = ")]}\"'”’»"
 _EN = re.compile(r"<en>(.*?)</en>", re.DOTALL)
 # sea-g2p spells acronyms as spaced lowercase letters inside <en> ("AI" -> "<en>a i</en>").
 _LETTER_RUN = re.compile(r"(?<!\S)[a-z](?: [a-z])+(?!\S)")
@@ -238,10 +242,13 @@ class Pipeline:
         ).hexdigest()
         self.version = f"{RULES_VERSION}-{digest[:8]}"
 
-    def process(self, text: str, *, vietnamese: bool) -> tuple[str, list[str]]:
+    def process(
+        self, text: str, *, vietnamese: bool, nonverbal_tags: bool = True
+    ) -> tuple[str, list[str]]:
         """Return (engine text, text warnings in detection order) or raise TextError.
 
         `vietnamese` is true when the effective language is Vietnamese and normalization is on.
+        `nonverbal_tags` is false for a model that would read tags and CMU phones as words.
         """
         text = unicodedata.normalize("NFC", text)
         if len(text) > self.max_chars:
@@ -252,6 +259,10 @@ class Pipeline:
             raise TextError("model_control")
 
         text, warnings = _clean(text)
+        if not nonverbal_tags:
+            text, count = _drop_tags(text)
+            if count:
+                warnings.append("omitted_nonverbal_tag")
         if vietnamese:
             text = self._vietnamese(text)
         text = _finish(text)
@@ -333,6 +344,26 @@ def _clean(text: str) -> tuple[str, list[str]]:
     lines = [line for line in (_WS.sub(" ", line).strip() for line in text.split("\n")) if line]
     text = " ".join(_end_line(line, last=i == len(lines) - 1) for i, line in enumerate(lines))
     return text, warnings
+
+
+def _drop_tags(text: str) -> tuple[str, int]:
+    """Remove non-verbal tags and CMU phones; return (text, number removed).
+
+    Punctuation right after a tag is kept only when it does not follow other punctuation or the
+    start of the text, so "A [laughter], B" -> "A, B" and "[sigh]. A" -> "A".
+    """
+    out = ""
+    end = count = 0
+    for m in _TAG_SPAN.finditer(text):
+        out = (out + text[end : m.start()]).rstrip()
+        punct = m.group("punct")
+        if not out or out[-1] in _PUNCT_END:
+            punct = ""
+        end = m.end()
+        # No space before a closing bracket or quote: "(cười [laughter])" -> "(cười)".
+        out += punct + ("" if text[end : end + 1] in _CLOSING and end < len(text) else " ")
+        count += 1
+    return out + text[end:], count
 
 
 def _tables(text: str) -> str:

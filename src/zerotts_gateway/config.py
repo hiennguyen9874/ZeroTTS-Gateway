@@ -71,6 +71,9 @@ class ShortTextSpeedRamp:
 class ModelDefaults:
     language: str | None = None
     normalize: bool = True
+    # False for a model that does not understand non-verbal tags or CMU phones: the pipeline
+    # removes them and adds the text warning "omitted_nonverbal_tag".
+    nonverbal_tags: bool = True
     # Operator option, off by default (ADR 0004): `speed` sent upstream when the caller sends no
     # `speed` and the engine text has at most short_text_max_syllables syllables. audio.cpp gives
     # short text too little time, so some voices drop its first phrase (issue #18).

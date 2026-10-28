@@ -2,7 +2,7 @@
 
 Lượt nghe lại #7 (model/giọng/seed, đối chứng và giới hạn): [báo cáo](reports/issue7-listening.md).
 
-Cần audio.cpp ([USAGE.md](USAGE.md)) và gateway đang chạy. Script đọc các ca không lỗi (mặc định golden; xem [Bộ câu nghe thử](#bộ-câu-nghe-thử)), gọi cả gateway (A) lẫn audio.cpp trực tiếp (B) với cùng model, voice, seed, rồi lưu WAV, chỉ số và trang so sánh:
+Cần audio.cpp ([USAGE.md](USAGE.md)) và gateway đang chạy. Script đọc các ca không lỗi, bỏ ca gắn `model` khác `--model` (mặc định golden; xem [Bộ câu nghe thử](#bộ-câu-nghe-thử)), gọi cả gateway (A) lẫn audio.cpp trực tiếp (B) với cùng model, voice, seed, rồi lưu WAV, chỉ số và trang so sánh:
 
 ```bash
 uv run python scripts/render_samples.py --out outputs/listen-001   # --model, --voice, --seed, --group, --id, --no-direct, --normalize-on
