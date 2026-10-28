@@ -13,6 +13,7 @@ import numpy as np
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response
 from starlette.exceptions import HTTPException as StarletteHTTPException
+from zerotts.chunking import chunk_text, clean_segment_punctuation, normalize_punctuation
 
 from .config import Settings
 from .engine import SAMPLE_RATE, Engine, ZeroTTSEngine
@@ -26,6 +27,9 @@ HTTP_ERRORS = {
 # Fields ZeroTTS cannot honour; rejected instead of silently ignored (ADR 0005).
 UNSUPPORTED_FIELDS = ("voice_ref", "reference_text", "instruct", "instructions")
 MAX_SEED = 2**64
+# Longest estimated audio per segment; ZeroTTS truncates at 512 tokens and stops at
+# 1500 frames (120 s), so long engine text is split by sentence (ADR 0001, ADR 0005).
+MAX_SEGMENT_SEC = 15.0
 
 
 class ServerError(Exception):
@@ -87,6 +91,15 @@ def wav16(pcm: bytes) -> bytes:
         f.setframerate(SAMPLE_RATE)
         f.writeframes(pcm)
     return buffer.getvalue()
+
+
+def split_segments(text: str) -> list[str]:
+    """zerotts's own long-form path (webui `get_text_segments`, minus its number normalizer).
+
+    Splits by sentence, then comma, then word, so each segment stays under MAX_SEGMENT_SEC.
+    """
+    chunks = chunk_text(normalize_punctuation(text), max_chunk_sec=MAX_SEGMENT_SEC)
+    return [s for s in map(clean_segment_punctuation, chunks) if s]
 
 
 def create_app(settings: Settings, engine: Engine | None = None) -> FastAPI:
@@ -206,13 +219,19 @@ def create_app(settings: Settings, engine: Engine | None = None) -> FastAPI:
             voice = model.default_voice
         if not isinstance(voice, str) or voice not in engine.voices():
             raise ServerError(400, "unknown_voice", "unknown voice")
-        fields.update(model=model_id, voice=voice, seed=seed, input_chars=len(text))
+        segments = split_segments(text)
+        if not segments:
+            raise ServerError(400, "invalid_request_error", "'input' has no speakable text")
+        fields.update(
+            model=model_id, voice=voice, seed=seed, input_chars=len(text), segments=len(segments)
+        )
 
         start = time.perf_counter()
         try:
             pcm = await asyncio.to_thread(
                 lambda: b"".join(
-                    pcm16(chunk) for chunk in engine.synthesize(text, voice, seed, model.sampling)
+                    pcm16(chunk)
+                    for chunk in engine.synthesize(segments, voice, seed, model.sampling)
                 )
             )
         except Exception as exc:

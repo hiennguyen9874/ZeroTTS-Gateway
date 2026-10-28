@@ -34,7 +34,7 @@ def pcm16(chunks) -> bytes:
 
 
 class FakeEngine:
-    """Deterministic chunks; records each synthesize call. load() blocks until `loaded` is set."""
+    """Yields `chunks` once per segment; records each call. load() blocks until `loaded` is set."""
 
     def __init__(self, voices=VOICES, chunks=CHUNKS, fail_load=False):
         self._voices, self.chunks, self.fail_load = voices, chunks, fail_load
@@ -51,11 +51,14 @@ class FakeEngine:
     def voices(self):
         return self._voices
 
-    def synthesize(self, text, voice, seed, sampling):
-        self.calls.append({"text": text, "voice": voice, "seed": seed, "sampling": sampling})
+    def synthesize(self, segments, voice, seed, sampling):
+        self.calls.append(
+            {"segments": list(segments), "voice": voice, "seed": seed, "sampling": sampling}
+        )
         if self.error:
             raise self.error
-        yield from self.chunks
+        for _ in segments:
+            yield from self.chunks
 
 
 def wait_for_health(client):
@@ -126,7 +129,7 @@ def test_speech_returns_48k_mono_16bit_wav_of_engine_audio(client, engine, extra
     assert response.headers["content-type"] == "audio/wav"
     assert read_wav(response.content) == (48000, 1, 2, pcm16(CHUNKS))
     assert float(response.headers["X-AudioCPP-Audio-Duration-Ms"]) == pytest.approx(100.1, 0.01)
-    assert [call["text"] for call in engine.calls] == [TEXT]
+    assert [call["segments"] for call in engine.calls] == [[TEXT]]
 
 
 def test_speech_pcm_returns_raw_samples(client):
@@ -153,6 +156,58 @@ def test_speech_rejects_other_response_formats(client, engine, response_format):
     response = client.post(SPEECH, json=speech_body(response_format=response_format))
 
     assert_error(response, 400, "invalid_request_error")
+    assert engine.calls == []
+
+
+# --- long text segmentation --------------------------------------------------
+
+SENTENCES = [
+    f"Đây là câu số {i}, kể về một ngày làm việc dài ở văn phòng của công ty." for i in range(12)
+]
+# ZeroTTS's chunk budget: 15 s at 15 characters per second.
+MAX_SEGMENT_CHARS = 225
+
+
+def test_long_text_reaches_the_engine_as_ordered_sentence_segments(client, engine):
+    text = " ".join(SENTENCES)
+
+    response = client.post(SPEECH, json=speech_body(input=text))
+
+    assert response.status_code == 200
+    [call] = engine.calls
+    segments = call["segments"]
+    assert len(segments) > 1
+    assert all(len(s) <= MAX_SEGMENT_CHARS for s in segments)
+    # Sentence boundaries: every segment is whole sentences, in order, no word lost.
+    assert all(s.endswith(".") for s in segments)
+    assert " ".join(segments) == text
+    # One WAV of every segment's audio, joined in order.
+    assert read_wav(response.content) == (48000, 1, 2, pcm16(CHUNKS * len(segments)))
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        pytest.param(", ".join(f"phần {i} của một câu rất dài" for i in range(20)), id="commas"),
+        pytest.param(" ".join(f"từ{i}" for i in range(120)), id="words"),
+    ],
+)
+def test_overlong_sentence_is_split_by_comma_then_word(client, engine, text):
+    assert len(text) > MAX_SEGMENT_CHARS
+
+    assert client.post(SPEECH, json=speech_body(input=text)).status_code == 200
+
+    segments = engine.calls[0]["segments"]
+    assert len(segments) > 1
+    assert all(len(s) <= MAX_SEGMENT_CHARS + 1 for s in segments)  # + the added end mark
+    words = [w.strip(",.") for s in segments for w in s.split()]
+    assert words == [w.strip(",.") for w in text.split()]
+
+
+def test_input_with_no_speakable_text_is_400(client, engine):
+    assert_error(
+        client.post(SPEECH, json=speech_body(input="... !!")), 400, "invalid_request_error"
+    )
     assert engine.calls == []
 
 
@@ -364,6 +419,16 @@ def test_engine_failure_is_500_without_text(client, engine):
     assert_error(client.post(SPEECH, json=speech_body()), 500, "server_error")
 
 
+def test_logs_count_segments_of_long_text(client, caplog):
+    caplog.set_level(logging.INFO, logger="zerotts_server")
+    client.post(SPEECH, json=speech_body(input=" ".join(SENTENCES)))
+
+    [record] = [r for r in caplog.records if r.getMessage() == "request"]
+    assert record.fields["segments"] > 1
+    logged = json.dumps(record.fields, ensure_ascii=False)
+    assert "câu" not in logged and "văn phòng" not in logged
+
+
 def test_logs_carry_no_text_or_audio(client, engine, caplog):
     caplog.set_level(logging.INFO, logger="zerotts_server")
     client.post(SPEECH, json=speech_body(seed=3, voice="giahuy"))
@@ -381,6 +446,7 @@ def test_logs_carry_no_text_or_audio(client, engine, caplog):
         len(TEXT),
     )
     assert {"synth_ms", "audio_ms", "rtf"} <= set(ok)
+    assert ok["segments"] == 1
     assert (failed["engine_error"], failed["error"]) == ("RuntimeError", "server_error")
     logged = json.dumps([r.fields for r in records], ensure_ascii=False)
     assert "Xin" not in logged and "chào" not in logged

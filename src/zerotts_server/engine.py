@@ -4,7 +4,7 @@ Tests inject a fake engine (`create_app(settings, engine=...)`); production uses
 """
 
 import threading
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Protocol
@@ -14,6 +14,8 @@ import numpy as np
 from .config import Sampling
 
 SAMPLE_RATE = 48_000
+# Silence between segments; zerotts's own `say --chunk` default (gap_sec).
+SEGMENT_GAP_SEC = 0.15
 
 
 @dataclass(frozen=True)
@@ -33,9 +35,12 @@ class Engine(Protocol):
         """Voices by name; valid only after load()."""
 
     def synthesize(
-        self, text: str, voice: str, seed: int | None, sampling: Sampling
+        self, segments: Sequence[str], voice: str, seed: int | None, sampling: Sampling
     ) -> Iterator[np.ndarray]:
-        """Yield float32 mono chunks at SAMPLE_RATE. A None seed means fresh entropy."""
+        """Synthesize the segments of one engine text in order, as one utterance.
+
+        Yield float32 mono chunks at SAMPLE_RATE. A None seed means fresh entropy.
+        """
 
 
 class _SeededSession:
@@ -86,9 +91,16 @@ class ZeroTTSEngine:
         }
 
     def synthesize(
-        self, text: str, voice: str, seed: int | None, sampling: Sampling
+        self, segments: Sequence[str], voice: str, seed: int | None, sampling: Sampling
     ) -> Iterator[np.ndarray]:
+        gap = np.zeros(int(SEGMENT_GAP_SEC * SAMPLE_RATE), dtype=np.float32)
         with self._lock:
+            # One RNG per request, so a seed reproduces the whole multi-segment audio.
             self._tts.local_frame_decode_sess.rng = np.random.default_rng(seed)
-            audio = self._tts.synthesize(text, voice=self._voices[voice].emb, **asdict(sampling))
-        yield audio.reshape(-1).astype(np.float32, copy=False)
+            for i, segment in enumerate(segments):
+                if i:
+                    yield gap
+                audio = self._tts.synthesize(
+                    segment, voice=self._voices[voice].emb, **asdict(sampling)
+                )
+                yield audio.reshape(-1).astype(np.float32, copy=False)

@@ -1,6 +1,6 @@
 # Chạy và cấu hình `zerotts_server`
 
-`zerotts_server` là upstream mới (ADR 0005): bọc `zerotts==0.1.5` trên onnxruntime CPU và nói phần API audio.cpp mà gateway dùng. Spec: issue #1. Hiện mới có model offline `zerotts`; chưa chia đoạn text dài (#4), chưa stream (#5), một engine xử lý lần lượt từng request (worker và `busy_timeout`: #6). Docker và script tải weights: #7.
+`zerotts_server` là upstream mới (ADR 0005): bọc `zerotts==0.1.5` trên onnxruntime CPU và nói phần API audio.cpp mà gateway dùng. Spec: issue #1. Hiện mới có model offline `zerotts`; chưa stream (#5), một engine xử lý lần lượt từng request (worker và `busy_timeout`: #6). Docker và script tải weights: #7.
 
 ## Weights
 
@@ -49,10 +49,11 @@ Biến môi trường:
 Request `/v1/audio/speech`:
 
 - `voice`: tên voice; thiếu thì dùng `default_voice` của model; voice lạ trả `400 unknown_voice`.
+- `input`: engine text được chia thành đoạn theo cách của `zerotts` (ADR 0001, ADR 0005): `normalize_punctuation` (`;` thành `,`, xuống dòng thành dấu chấm), `chunk_text` chia theo câu rồi gom lại sao cho mỗi đoạn ≤ khoảng 15 s (225 ký tự); câu quá dài thì chia tiếp theo dấu phẩy, rồi theo từ; `clean_segment_punctuation` đổi dấu câu giữa đoạn (trừ `- / . : ? ! " ' %`) thành `,` và đảm bảo đoạn kết bằng `.`, `!` hoặc `?`. Các đoạn được tổng hợp tuần tự trong cùng request, cùng một RNG theo seed, cách nhau 0,15 s im lặng, rồi trả về một WAV duy nhất. Không còn bị cắt ở 512 token hay 1500 frame (120 s). Input không còn chữ nào để đọc (ví dụ `... !!`) trả `400 invalid_request_error`.
 - `seed` (hoặc `options.seed`): số nguyên trong [0, 2^64), có thể gửi dạng chuỗi thập phân. Cùng seed cho cùng audio; seed áp riêng cho từng request, không dùng RNG toàn cục của numpy. Không có seed thì mỗi request ngẫu nhiên.
 - Trả `400 unsupported_option`: `voice_ref`, `reference_text`, `instruct`, `instructions`, `speed`/`speaking_rate` khác 1, mọi khóa trong `options` ngoài `seed`, `stream_format` hoặc `stream: true`. `speed: 1` được chấp nhận.
 
-Body lỗi theo dạng audio.cpp `{"error":{"message","type"}}`; `message` không chứa text. Log là JSON, mỗi request một dòng: model, voice, seed, số ký tự, `synth_ms`, `audio_ms`, `rtf`, mã lỗi; không có text hay audio.
+Body lỗi theo dạng audio.cpp `{"error":{"message","type"}}`; `message` không chứa text. Log là JSON, mỗi request một dòng: model, voice, seed, số ký tự, số đoạn (`segments`), `synth_ms`, `audio_ms`, `rtf`, mã lỗi; không có text hay audio.
 
 ## Test
 

@@ -38,10 +38,8 @@ def client():
         yield client
 
 
-def speak(client, **extra) -> bytes:
-    response = client.post(
-        "/v1/audio/speech", json={"model": "zerotts", "input": "Xin chào.", **extra}
-    )
+def speak(client, text="Xin chào.", **extra) -> bytes:
+    response = client.post("/v1/audio/speech", json={"model": "zerotts", "input": text, **extra})
     assert response.status_code == 200, response.text
     with wave.open(io.BytesIO(response.content)) as f:
         assert (f.getframerate(), f.getnchannels(), f.getsampwidth()) == (48000, 1, 2)
@@ -54,6 +52,17 @@ def test_offline_speech_is_nonempty_48k_audio(client):
 
     assert len(pcm) > 48000 * 0.3
     assert np.abs(pcm).max() > 1000
+
+
+def test_long_text_is_read_past_one_segment(client):
+    # About 40 s of speech: several segments, one WAV.
+    text = " ".join(
+        f"Đây là câu số {i}, kể về một ngày làm việc dài ở văn phòng của công ty."
+        for i in range(12)
+    )
+    pcm = np.frombuffer(speak(client, text, seed=5), dtype="<i2")
+
+    assert len(pcm) > 48000 * 25
 
 
 def test_same_seed_reproduces_audio_regardless_of_global_rng(client):
