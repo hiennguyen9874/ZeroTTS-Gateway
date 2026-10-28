@@ -17,15 +17,28 @@ dependencies = [
     "uvicorn>=0.54.0",
 ]
 
+[project.optional-dependencies]
+# zerotts_server (the upstream, ADR 0005); the gateway image does not need it.
+server = [
+    "numpy>=2.5.4",
+    "onnxruntime==1.31.1",
+    "zerotts==0.1.5",
+]
+
 [project.scripts]
 zerotts-gateway = "zerotts_gateway:main"
+zerotts-server = "zerotts_server:main"
 
 [build-system]
 requires = ["uv_build>=0.12.9,<0.13.0"]
 build-backend = "uv_build"
 
+[tool.uv.build-backend]
+module-name = ["zerotts_gateway", "zerotts_server"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = ["real_model: runs the real ZeroTTS weights from models/ (skipped when absent)"]
 
 [dependency-groups]
 asr = [
@@ -35,6 +48,7 @@ asr = [
     "sherpa-onnx-core>=1.12",
 ]
 dev = [
+    "zerotts-gateway[server]",
     "pytest>=9.1.1",
     "ruff>=0.8",
 ]

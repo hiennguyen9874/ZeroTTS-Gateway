@@ -1,0 +1,26 @@
+# zerotts_server config (the ZeroTTS upstream, ADR 0005). Env overrides:
+#   ZEROTTS_SERVER_CONFIG     path to this file, when --config is not given
+#   ZEROTTS_SERVER_MODEL_DIR  model_dir
+#   ZEROTTS_SERVER_HOST       listen address
+host = "127.0.0.1"
+port = 8080
+# Local weights downloaded with `hf download --local-dir` (not the HF cache); relative to this file.
+model_dir = "../models/ZeroTTS"
+# Voice packs (<name>/voice.npz + meta.json); default <model_dir>/voices. Drop a pack in, restart.
+# voices_dir = "../models/ZeroTTS/voices"
+# onnxruntime intra-op threads.
+threads = 8
+
+# Model ids served; callers cannot change sampling, only `seed`.
+[models.zerotts]
+# Used when the request has no `voice`; must exist in the voice directory.
+default_voice = "maichi"
+
+[models.zerotts.sampling]
+cfg_scale = 1.0
+text_temperature = 1.0
+text_topk = 50
+audio_temperature = 0.8
+audio_topk = 25
+audio_topp = 0.95
+audio_repetition_penalty = 1.2

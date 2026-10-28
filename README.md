@@ -58,6 +58,7 @@ Mặc định nên dùng `g-omnivoice` + `vieneu_v3_Kim_Thanh`; đoạn dài c�
 | [docs/INSTALL.md](docs/INSTALL.md) | Build audio.cpp với CUDA 12.6 trên A100 |
 | [docs/USAGE.md](docs/USAGE.md) | Convert checkpoint sang GGUF, CLI, server audio.cpp, voice clone/design, API |
 | [docs/GATEWAY.md](docs/GATEWAY.md) | Chạy gateway, biến môi trường, route, config, Docker |
+| [docs/ZEROTTS_SERVER.md](docs/ZEROTTS_SERVER.md) | Chạy `zerotts_server` (upstream ZeroTTS): weights, config, route, option bị từ chối |
 | [docs/DEPLOY.md](docs/DEPLOY.md) | Triển khai Docker: chỉ gateway, chỉ audio.cpp, hoặc cả hai |
 | [docs/TEXT_PIPELINE.md](docs/TEXT_PIPELINE.md) | Text pipeline, cảnh báo và mã lỗi, từ điển phát âm, thêm ca regression |
 | [docs/LISTENING.md](docs/LISTENING.md) | Render mẫu nghe thử A/B, bộ câu nghe, chấm bằng ASR, chạy mọi model × giọng |

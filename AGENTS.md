@@ -21,6 +21,7 @@ A thin **gateway** in front of a TTS **upstream**. The upstream is migrating fro
 - `docs/INSTALL.md`: building audio.cpp with CUDA 12.6 on A100.
 - `docs/USAGE.md`: converting OmniVoice checkpoints to GGUF, CLI/server usage, voice clone/design, model table.
 - `docs/GATEWAY.md`: running the gateway, env vars, routes, config, Docker.
+- `docs/ZEROTTS_SERVER.md`: running `zerotts_server`, weights download, config (`configs/zerotts_server.toml`), routes, rejected options.
 - `docs/DEPLOY.md`: Docker deployment shapes (gateway only, audio.cpp only, both) via `COMPOSE_FILE`; `docker/audiocpp.Dockerfile` builds the upstream from the pinned submodule.
 - `docs/TEXT_PIPELINE.md`: text pipeline behaviour, pronunciation lexicon, adding golden cases.
 - `docs/LISTENING.md`: `render_samples.py`/`render_all.py` listening runs, ASR scoring, output format.
