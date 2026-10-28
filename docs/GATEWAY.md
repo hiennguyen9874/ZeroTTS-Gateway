@@ -1,6 +1,6 @@
 # Chạy và cấu hình gateway
 
-Gateway đứng trước audio.cpp (upstream) và giữ nguyên API của upstream: caller chỉ đổi base URL. Spec: issue #1. Build và chạy audio.cpp: [INSTALL.md](INSTALL.md), [USAGE.md](USAGE.md).
+Gateway đứng trước upstream (`zerotts_server`, hoặc audio.cpp chạy OmniVoice cho tới #11) và giữ nguyên API kiểu audio.cpp: caller chỉ đổi base URL. Spec: issue #1. Chạy `zerotts_server`: [ZEROTTS_SERVER.md](ZEROTTS_SERVER.md); audio.cpp: [INSTALL.md](INSTALL.md), [USAGE.md](USAGE.md).
 
 ## Chạy trực tiếp
 
@@ -40,7 +40,7 @@ Body lỗi theo dạng của audio.cpp: `{"error":{"message","type"}}`.
 
 ## Chạy bằng Docker
 
-Container chỉ chứa gateway. audio.cpp chạy trên host, ở máy riêng, hoặc trong container riêng cùng compose (`compose.audiocpp.yaml` + `compose.stack.yaml`): xem [DEPLOY.md](DEPLOY.md). Phần dưới là cách chỉ chạy gateway (`COMPOSE_FILE=compose.yaml`, mặc định).
+Container chỉ chứa gateway. Upstream chạy trên host, ở máy riêng, hoặc trong container riêng cùng compose (`compose.zerotts.yaml` + `compose.zerotts-stack.yaml`; audio.cpp: `compose.audiocpp.yaml` + `compose.stack.yaml`): xem [DEPLOY.md](DEPLOY.md). Phần dưới là cách chỉ chạy gateway (`COMPOSE_FILE=compose.yaml`, mặc định).
 
 ```bash
 cp .env.example .env        # sửa ZEROTTS_GATEWAY_UPSTREAM_URL, ZEROTTS_GATEWAY_API_KEY
@@ -51,6 +51,7 @@ curl localhost:8000/ready   # 200 khi tới được upstream, 503 khi không
 
 - `configs/` được mount read-only vào `/config`; gateway đọc `/config/gateway.toml` và từ điển theo `lexicon_path`. Sửa config hoặc từ điển rồi `docker compose restart`, không cần build lại.
 - Trong container gateway lắng nghe trên `0.0.0.0:8000` (image đặt `ZEROTTS_GATEWAY_HOST=0.0.0.0`; `port` vẫn lấy từ config, đổi thì sửa cả `ports` trong `compose.yaml`). Cổng trên host: `GATEWAY_PORT`.
-- `127.0.0.1` trong container là chính container. audio.cpp trên host: dùng `http://host.docker.internal:8080` (mặc định, compose đã thêm `host-gateway`) và cho audio.cpp lắng nghe trên `0.0.0.0` thay vì `127.0.0.1`. audio.cpp ở máy khác: dùng host/IP của máy đó.
+- `127.0.0.1` trong container là chính container. Upstream trên host: dùng `http://host.docker.internal:8080` (mặc định, compose đã thêm `host-gateway`) và cho upstream lắng nghe trên `0.0.0.0` thay vì `127.0.0.1` (`zerotts_server`: `ZEROTTS_SERVER_HOST=0.0.0.0`). Upstream ở máy khác: dùng host/IP của máy đó.
+- Biến trong `.env` cho gateway: `ZEROTTS_GATEWAY_UPSTREAM_URL` (bị bỏ qua khi dùng overlay stack), `ZEROTTS_GATEWAY_API_KEY`, `GATEWAY_PORT` (mặc định `8000`).
 - Image: `python:3.12-slim`, `uv sync --locked --no-dev`, chạy bằng user không phải root; `.dockerignore` chỉ cho vào `pyproject.toml`, `uv.lock`, `README.md`, `src/`.
 - Healthcheck của image gọi `/health` (gateway còn sống), không gọi `/ready`: upstream chết không làm Docker restart gateway. Load balancer nên kiểm tra `/ready`.

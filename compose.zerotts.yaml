@@ -1,0 +1,21 @@
+# zerotts_server (the ZeroTTS upstream, ADR 0005) only, CPU only. Variables come from .env
+# (see .env.example). Weights first: `uv run scripts/download_zerotts.sh` (docs/DEPLOY.md).
+#   alone, e.g. on a separate CPU node:  docker compose -f compose.zerotts.yaml up -d --build
+#   with the gateway on the same host:   COMPOSE_FILE=compose.yaml:compose.zerotts.yaml:compose.zerotts-stack.yaml
+services:
+  zerotts:
+    build:
+      context: .
+      dockerfile: docker/zerotts_server.Dockerfile
+    image: ${ZEROTTS_SERVER_IMAGE:-zerotts-server:local}
+    restart: unless-stopped
+    # Same layout as the repo, so configs/zerotts_server.toml (model_dir = "../models/ZeroTTS",
+    # relative to itself) works unchanged. The image sets ZEROTTS_SERVER_HOST=0.0.0.0.
+    # Long syntax so a missing ./models fails at "up" instead of becoming an empty directory.
+    volumes:
+      - { type: bind, source: ./configs, target: /srv/configs, read_only: true, bind: { create_host_path: false } }
+      - { type: bind, source: ./models, target: /srv/models, read_only: true, bind: { create_host_path: false } }
+    # No auth: published on loopback by default (debugging, listening scripts). Set
+    # ZEROTTS_SERVER_BIND only when a gateway on another host needs it, behind a firewall.
+    ports:
+      - ${ZEROTTS_SERVER_BIND:-127.0.0.1}:${ZEROTTS_SERVER_PORT:-8080}:8080

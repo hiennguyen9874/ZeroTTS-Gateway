@@ -1,18 +1,16 @@
 # Chạy và cấu hình `zerotts_server`
 
-`zerotts_server` là upstream mới (ADR 0005): bọc `zerotts==0.1.5` trên onnxruntime CPU và nói phần API audio.cpp mà gateway dùng. Spec: issue #1. Có model offline `zerotts` và model streaming `zerotts-stream`; N worker chạy song song, request chờ worker rảnh tối đa `busy_timeout`. Docker và script tải weights: #7.
+`zerotts_server` là upstream mới (ADR 0005): bọc `zerotts==0.1.5` trên onnxruntime CPU và nói phần API audio.cpp mà gateway dùng. Spec: issue #1. Có model offline `zerotts` và model streaming `zerotts-stream`; N worker chạy song song, request chờ worker rảnh tối đa `busy_timeout`. Docker: [DEPLOY.md](DEPLOY.md#zerotts_server).
 
 ## Weights
 
-Tải vào thư mục cục bộ, không qua symlink của HF cache (onnxruntime ≥ 1.25 từ chối external data nằm sau symlink):
+`scripts/download_zerotts.sh` tải weights theo revision HF đã pin vào `models/ZeroTTS` (hoặc thư mục truyền vào làm tham số đầu) bằng `hf download --local-dir`: file thật, không qua symlink của HF cache (onnxruntime ≥ 1.25 từ chối external data nằm sau symlink). Chạy lại thì file đã đúng revision được bỏ qua, không tải lại (metadata nằm trong `models/ZeroTTS/.cache/huggingface`).
 
 ```bash
-uv run hf download zeroweight-ai/ZeroTTS --revision c2bfbd67dc648cac455077333f7cf5c18a2e3bb4 \
-  --local-dir models/ZeroTTS \
-  --include 'config.json' --include 'tokenizer.json' --include 'null_voice_emb.npy' \
-  --include 'silence_frame.npy' --include 'onnx/*' --include 'onnx/codec/*' \
-  --include 'voices/index.json' --include 'voices/*/voice.npz' --include 'voices/*/meta.json'
+uv run scripts/download_zerotts.sh             # cần CLI hf, có trong môi trường uv của repo
 ```
+
+Đổi revision: sửa `REVISION` trong script, tải lại, rồi chạy smoke test model thật (mục Test).
 
 ## Chạy
 

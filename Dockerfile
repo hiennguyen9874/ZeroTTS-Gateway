@@ -1,4 +1,5 @@
-# Gateway only; audio.cpp is a separate image (docker/audiocpp.Dockerfile) or runs elsewhere.
+# Gateway only; the upstream is a separate image (docker/zerotts_server.Dockerfile,
+# docker/audiocpp.Dockerfile) or runs elsewhere.
 # Config and lexicon are mounted at /config (compose.yaml).
 FROM python:3.12-slim
 

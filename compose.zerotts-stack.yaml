@@ -1,0 +1,12 @@
+# Overlay: gateway + zerotts_server on one host, over the compose network. Use only together with
+# compose.yaml and compose.zerotts.yaml:
+#   COMPOSE_FILE=compose.yaml:compose.zerotts.yaml:compose.zerotts-stack.yaml   (in .env)
+services:
+  gateway:
+    environment:
+      # Overrides ZEROTTS_GATEWAY_UPSTREAM_URL from .env.
+      ZEROTTS_GATEWAY_UPSTREAM_URL: http://zerotts:8080
+    # Healthy means the model is loaded and warmed up, so /ready is OK once the gateway is up.
+    depends_on:
+      zerotts:
+        condition: service_healthy

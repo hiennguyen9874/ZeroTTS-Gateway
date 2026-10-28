@@ -1,6 +1,6 @@
 """Opt-in smoke test on the real ZeroTTS weights; skipped unless they are in models/ZeroTTS.
 
-Download: `hf download zeroweight-ai/ZeroTTS --local-dir models/ZeroTTS` (ADR 0005).
+Download the pinned weights: `uv run scripts/download_zerotts.sh` (ADR 0005).
 Run explicitly with `uv run python -m pytest -m real_model`.
 """
 

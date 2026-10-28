@@ -22,11 +22,11 @@ A thin **gateway** in front of a TTS **upstream**. The upstream is migrating fro
 - `docs/USAGE.md`: converting OmniVoice checkpoints to GGUF, CLI/server usage, voice clone/design, model table.
 - `docs/GATEWAY.md`: running the gateway, env vars, routes, config, Docker.
 - `docs/ZEROTTS_SERVER.md`: running `zerotts_server`, weights download, config (`configs/zerotts_server.toml`), routes, rejected options.
-- `docs/DEPLOY.md`: Docker deployment shapes (gateway only, audio.cpp only, both) via `COMPOSE_FILE`; `docker/audiocpp.Dockerfile` builds the upstream from the pinned submodule.
+- `docs/DEPLOY.md`: Docker deployment shapes (gateway only, upstream only, both) via `COMPOSE_FILE`; `docker/zerotts_server.Dockerfile` + `compose.zerotts.yaml` (+ `compose.zerotts-stack.yaml`) run `zerotts_server` on CPU with weights from `scripts/download_zerotts.sh` mounted read-only; `docker/audiocpp.Dockerfile` builds audio.cpp from the pinned submodule.
 - `docs/TEXT_PIPELINE.md`: text pipeline behaviour, pronunciation lexicon, adding golden cases.
 - `docs/LISTENING.md`: `render_samples.py`/`render_all.py` listening runs, ASR scoring, output format.
 - `docs/MODEL_VOICE_RECOMMENDATIONS.md`: model/voice evaluation and recommended defaults.
-- OmniVoice-only until #11: `docs/INSTALL.md`, `docs/USAGE.md`, `configs/server.json`, `compose.audiocpp.yaml`, `docker/audiocpp.Dockerfile`.
+- OmniVoice-only until #11: `docs/INSTALL.md`, `docs/USAGE.md`, `configs/server.json`, `compose.audiocpp.yaml`, `compose.cpu.yaml`, `compose.stack.yaml`, `docker/audiocpp.Dockerfile`.
 - `configs/server.json` is the audio.cpp server config (model ids, `mode: streaming` entry); `configs/gateway.toml` is the gateway's per-model defaults.
 - `scripts/sample_voices.py`: samples Vietnamese HF datasets into `voices_candidates/` and installs picked voices into `voices/`.
 
