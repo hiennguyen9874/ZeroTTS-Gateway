@@ -397,8 +397,9 @@ def test_speech_warning_header_once_each_in_detection_order(client):
 @pytest.mark.parametrize(
     ("model", "sent_text", "warnings"),
     [
-        ("zerotts", "Xin chào, các bạn.", "omitted_nonverbal_tag"),
-        ("zerotts-stream", "Xin chào, các bạn.", "omitted_nonverbal_tag"),
+        # ZeroTTS: tags removed with a warning, then the full pipeline (#9).
+        ("zerotts", "xin chào, các bạn.", "omitted_nonverbal_tag"),
+        ("zerotts-stream", "xin chào, các bạn.", "omitted_nonverbal_tag"),
         # Tag-aware model: tags reach the upstream intact and no warning is added.
         ("g-omnivoice", "xin chào [laughter], các bạn [B EY1 S].", None),
     ],

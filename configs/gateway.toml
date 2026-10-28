@@ -16,17 +16,17 @@ lexicon_path = "lexicon.csv"
 
 # Per-model defaults; model ids not listed here are still forwarded.
 #
-# zerotts / zerotts-stream (zerotts_server, ADR 0005): normalize = false until the #9 A/B decides
-# on the normalizer and lexicon; nonverbal_tags = false because ZeroTTS reads "[laughter]" and CMU
-# phones as words, so the pipeline removes them and warns "omitted_nonverbal_tag".
+# zerotts / zerotts-stream (zerotts_server, ADR 0005): the full pipeline (normalizer, reading
+# rules, lexicon). In the #9 A/B (docs/reports/issue9-zerotts-text-pipeline-ab.md) ASR WER was
+# 0.072 with it vs 0.167 with cleanup only; dropping the lexicon changed nothing measurable.
+# nonverbal_tags = false because ZeroTTS reads "[laughter]" and CMU phones as words, so the
+# pipeline removes them and warns "omitted_nonverbal_tag".
 [models.zerotts]
 language = "vi"
-normalize = false
 nonverbal_tags = false
 
 [models.zerotts-stream]
 language = "vi"
-normalize = false
 nonverbal_tags = false
 
 # OmniVoice models (removed in #11).

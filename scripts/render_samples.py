@@ -23,10 +23,13 @@ verbatim with the gateway's engine text as input, so only reference_text differs
   index.html          players side by side with metrics and flags
 
 Streaming models (mode "streaming" in /v1/models) are called with stream_format=audio and
-response_format=pcm so TTFB is real; offline models return WAV. A request is never retried once
-it is sent; a stream that breaks after audio arrived is recorded as stream_aborted and no file is
-kept. Flags are hints for the listener, not a quality verdict. The console prints case ids and
-metrics only, never text. Exit status is 1 when any request did not produce audio.
+response_format=pcm so TTFB is real; offline models return WAV. For the zerotts family
+(zerotts_server) streamed PCM is 48 kHz and clone cases are skipped, since ZeroTTS cannot clone.
+--normalize-on sends text_processing.normalize=true on every case, for pipeline A/B runs. A
+request is never retried once it is sent; a stream that breaks after audio arrived is recorded as
+stream_aborted and no file is kept. Flags are hints for the listener, not a quality verdict. The
+console prints case ids and metrics only, never text. Exit status is 1 when any request did not
+produce audio.
 
 ASR scoring (optional): with an OpenAI-style transcription endpoint configured (OMNIVOICE_ASR_URL,
 OMNIVOICE_ASR_MODEL, OMNIVOICE_ASR_API_KEY or the --asr-* options), every WAV is transcribed via
@@ -70,6 +73,8 @@ VOICES = ROOT / "voices"
 
 SILENCE_LEVEL = 328  # ~-40 dBFS on s16
 CLIP_LEVEL = 32767
+OMNIVOICE_RATE = 24000
+ZEROTTS_RATE = 48000
 RECALL_THRESHOLD = 0.8
 # Not words to hear: non-verbal tags ("[laughter]") and CMU pronunciation spans ("[B EY1 S]").
 UNSPOKEN = re.compile(r"\[[a-z]+(?:-[a-z]+)?\]|\[[A-Z]+[0-2]?(?: [A-Z]+[0-2]?)*\]")
@@ -128,23 +133,30 @@ def main() -> int:
         cases = [c for c in cases if c["id"] in args.id]
     if args.question:
         cases = [c for c in cases if set(c.get("questions", ())) & set(args.question)]
-    if not cases:
-        sys.exit(f"no matching {args.case_set} cases")
-    prepare_out(args.out, args.overwrite)
 
     timeout = httpx.Timeout(args.timeout, connect=10)
     headers = {"authorization": f"Bearer {args.api_key}"} if args.api_key else {}
     gateway = httpx.Client(base_url=args.gateway, headers=headers, timeout=timeout)
+    models = gateway.get("/v1/models").raise_for_status().json()["data"]
+    entry = next((m for m in models if m["id"] == args.model), None)
+    if entry is None:
+        sys.exit(f"model {args.model!r} is not in the upstream's /v1/models")
+    mode = entry.get("mode")
+    streaming = mode == "streaming"
+    zerotts = entry.get("family") == "zerotts"
+    if zerotts:
+        # ZeroTTS has no voice encoder: zerotts_server rejects voice_ref (ADR 0005).
+        cases = [c for c in cases if "clone" not in c]
+    sample_rate = args.sample_rate or (ZEROTTS_RATE if zerotts else OMNIVOICE_RATE)
+    if not cases:
+        sys.exit(f"no matching {args.case_set} cases")
+    prepare_out(args.out, args.overwrite)
+
     upstream = None if args.no_direct else httpx.Client(base_url=args.upstream, timeout=timeout)
     asr = None
     if args.asr_url:
         asr_headers = {"authorization": f"Bearer {args.asr_api_key}"} if args.asr_api_key else {}
         asr = httpx.Client(base_url=args.asr_url, headers=asr_headers, timeout=timeout)
-    models = gateway.get("/v1/models").raise_for_status().json()["data"]
-    mode = next((m.get("mode") for m in models if m["id"] == args.model), None)
-    if mode is None:
-        sys.exit(f"model {args.model!r} is not in the upstream's /v1/models")
-    streaming = mode == "streaming"
     version = (
         gateway.post("/v1/text/normalize", json={"input": "x"})
         .raise_for_status()
@@ -178,7 +190,7 @@ def main() -> int:
             if streaming
             else {"response_format": "wav"}
         )
-        normalize_flag = None if args.normalize_on else case.get("normalize")
+        normalize_flag = True if args.normalize_on else case.get("normalize")
         processing = (
             {"text_processing": {"normalize": normalize_flag}} if normalize_flag is not None else {}
         )
@@ -198,7 +210,7 @@ def main() -> int:
             # The gateway side's model input is the engine text; the direct side's is its input.
             sent = engine if side == "gateway" else payload["input"]
             sample = Sample(case, side, engine, sent, normalize_flag, reference)
-            audio = synthesize(client, payload, sample, streaming, args.sample_rate)
+            audio = synthesize(client, payload, sample, streaming, sample_rate)
             if audio:
                 sample.file = f"{case['id']}.{side}.wav"
                 write_wav(args.out / sample.file, *audio)
@@ -288,14 +300,15 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument(
         "--sample-rate",
         type=int,
-        default=24000,
-        help="rate of streamed PCM, which carries no header (OmniVoice: 24000)",
+        help="rate of streamed PCM, which carries no header (default: 48000 for the zerotts"
+        " family in /v1/models, else 24000 for OmniVoice)",
     )
     ap.add_argument("--timeout", type=float, default=600, help="per-request read timeout (s)")
     ap.add_argument(
         "--normalize-on",
         action="store_true",
-        help='ignore "normalize": false in cases, so they are rendered as in production',
+        help="send text_processing.normalize=true for every case, overriding the case and the"
+        ' model default ("normalize": false in cases, normalize = false for ZeroTTS)',
     )
     ap.add_argument(
         "--asr-url",
@@ -618,10 +631,10 @@ def render_html(samples: list[Sample], manifest: dict) -> str:
         if c.get("normalize") is False:
             normalize = (
                 '<div class="warn">normalize: false in the case; rendered with normalize on'
-                " (--normalize-on), as in production</div>"
+                " (--normalize-on)</div>"
                 if manifest["normalize_on"]
-                else '<div class="warn">normalize: false (tests cleanup only; production has'
-                " normalize on, so symbols such as @ &lt; &gt; reach the model as typed)</div>"
+                else '<div class="warn">normalize: false (tests cleanup only, so symbols such as'
+                " @ &lt; &gt; reach the model as typed)</div>"
             )
         control_speed = c.get("speed", 1.0 if "clone" in c else None)
         if control_speed is not None:

@@ -19,3 +19,4 @@ Gateway phải bù những chỗ sea-g2p không làm, hoặc làm sai với Omni
 - `punc_norm=True` gộp câu ngắn bằng dấu phẩy, làm hỏng ranh giới chunk (xem ADR 0001), nên không dùng.
 - Toàn bộ output là chữ thường. Hiện chấp nhận, cần kiểm bằng nghe thử.
 - Lexicon chạy **trước** normalize, nên phần thay thế phải là dạng nói tiếng Việt để đi qua normalize mà không bị đổi.
+- ZeroTTS (ADR 0005) cũng dùng normalizer này, sau A/B #9 ([báo cáo](../reports/issue9-zerotts-text-pipeline-ab.md)): WER 0,072 so với 0,167 khi gửi văn bản thô. Chữ thường hoá toàn bộ không làm tăng lỗi đo được. Còn một chỗ hại: viết tắt bị đánh vần thành tên chữ cái (`PIN` → `phê i nờ`, `OTP` → `ô tê phê`) thì ZeroTTS đọc kém hơn để nguyên viết tắt. Hai ca này được ghi thành known issue trong golden.

@@ -61,13 +61,22 @@ CLONE_RUN = "_clone"
 def main() -> int:
     args = parse_args()
     headers = {"authorization": f"Bearer {args.api_key}"} if args.api_key else {}
-    models = args.model or gateway_models(args.gateway, headers)
-    voices = args.voice or library_voices()
-    if not models or not voices:
+    families = gateway_models(args.gateway, headers)
+    models = args.model or list(families)
+    voices = {}
+    for model in models:
+        # ZeroTTS voices are the upstream's preset packs; OmniVoice ones are voices/*.wav.
+        if args.voice:
+            voices[model] = args.voice
+        elif families.get(model) == "zerotts":
+            voices[model] = gateway_voices(args.gateway, headers)
+        else:
+            voices[model] = library_voices()
+    if not models or not all(voices.values()):
         sys.exit("no models or no voices to render")
-    plan = build_plan(args.set or list(CASE_SETS), models, voices)
+    plan = build_plan(args.set or list(CASE_SETS), models, voices, families)
     print(f"{len(plan)} runs: sets={args.set or list(CASE_SETS)} models={models}"
-          f" voices={len(voices)} -> {args.out}", flush=True)  # fmt: skip
+          f" voices={sum(map(len, voices.values()))} -> {args.out}", flush=True)  # fmt: skip
     if args.dry_run:
         for run in plan:
             print(f"  {run['set']}/{run['model']}/{run['voice']} groups={','.join(run['groups'])}")
@@ -85,9 +94,10 @@ def main() -> int:
         command = [
             sys.executable, str(RENDER), "--gateway", args.gateway, "--upstream", args.upstream,
             "--set", run["set"], "--model", run["model"], "--seed", str(args.seed),
-            "--timeout", str(args.timeout), "--sample-rate", str(args.sample_rate),
-            "--out", str(out),
+            "--timeout", str(args.timeout), "--out", str(out),
         ]  # fmt: skip
+        if args.sample_rate:
+            command += ["--sample-rate", str(args.sample_rate)]
         if run["voice"] != CLONE_RUN:
             command += ["--voice", run["voice"]]
         for group in run["groups"]:
@@ -132,7 +142,9 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--voice", action="append", help="voices (repeatable; default: all in voices/)")
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--timeout", type=float, default=600, help="per-request read timeout (s)")
-    ap.add_argument("--sample-rate", type=int, default=24000, help="rate of streamed PCM")
+    ap.add_argument(
+        "--sample-rate", type=int, help="rate of streamed PCM (default: render_samples.py's)"
+    )
     ap.add_argument(
         "--out",
         type=Path,
@@ -142,15 +154,22 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument(
         "--normalize-on",
         action="store_true",
-        help='pass --normalize-on: ignore "normalize": false in cases, as in production',
+        help="pass --normalize-on: send text_processing.normalize=true for every case",
     )
     ap.add_argument("--dry-run", action="store_true", help="print the plan and exit")
     return ap.parse_args()
 
 
-def gateway_models(gateway: str, headers: dict) -> list[str]:
+def gateway_models(gateway: str, headers: dict) -> dict[str, str | None]:
+    """TTS model ids in the gateway's /v1/models, each with its family."""
     data = httpx.get(f"{gateway}/v1/models", headers=headers, timeout=30).raise_for_status()
-    return [m["id"] for m in data.json()["data"] if m.get("task", "tts") == "tts"]
+    return {m["id"]: m.get("family") for m in data.json()["data"] if m.get("task", "tts") == "tts"}
+
+
+def gateway_voices(gateway: str, headers: dict) -> list[str]:
+    """Voice names in the gateway's /v1/audio/voices (ZeroTTS preset voices)."""
+    data = httpx.get(f"{gateway}/v1/audio/voices", headers=headers, timeout=30).raise_for_status()
+    return sorted(data.json()["voices"])
 
 
 def library_voices() -> list[str]:
@@ -164,7 +183,9 @@ def library_voices() -> list[str]:
     return [v for v in voices if v in named]
 
 
-def build_plan(sets: list[str], models: list[str], voices: list[str]) -> list[dict]:
+def build_plan(
+    sets: list[str], models: list[str], voices: dict[str, list[str]], families: dict
+) -> list[dict]:
     split = {}
     for name in sets:
         cases = [c for c in json.loads(CASE_SETS[name].read_text("utf-8")) if "error" not in c]
@@ -179,9 +200,11 @@ def build_plan(sets: list[str], models: list[str], voices: list[str]) -> list[di
             voiced, clone = split[name]
             if voiced:
                 plan += [
-                    {"set": name, "model": model, "voice": v, "groups": voiced} for v in voices
+                    {"set": name, "model": model, "voice": v, "groups": voiced}
+                    for v in voices[model]
                 ]
-            if clone:
+            # ZeroTTS cannot clone (ADR 0005), so clone-only groups are not planned for it.
+            if clone and families.get(model) != "zerotts":
                 plan.append({"set": name, "model": model, "voice": CLONE_RUN, "groups": clone})
     return plan
 

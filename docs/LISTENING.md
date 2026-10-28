@@ -2,14 +2,15 @@
 
 Lượt nghe lại #7 (model/giọng/seed, đối chứng và giới hạn): [báo cáo](reports/issue7-listening.md).
 
-Cần audio.cpp ([USAGE.md](USAGE.md)) và gateway đang chạy. Script đọc các ca không lỗi, bỏ ca gắn `model` khác `--model` (mặc định golden; xem [Bộ câu nghe thử](#bộ-câu-nghe-thử)), gọi cả gateway (A) lẫn audio.cpp trực tiếp (B) với cùng model, voice, seed, rồi lưu WAV, chỉ số và trang so sánh:
+Cần upstream (audio.cpp, [USAGE.md](USAGE.md), hoặc `zerotts_server`, [ZEROTTS_SERVER.md](ZEROTTS_SERVER.md)) và gateway đang chạy. Script đọc các ca không lỗi, bỏ ca gắn `model` khác `--model` (mặc định golden; xem [Bộ câu nghe thử](#bộ-câu-nghe-thử)), gọi cả gateway (A) lẫn audio.cpp trực tiếp (B) với cùng model, voice, seed, rồi lưu WAV, chỉ số và trang so sánh:
 
 ```bash
 uv run python scripts/render_samples.py --out outputs/listen-001   # --model, --voice, --seed, --group, --id, --no-direct, --normalize-on
 python -m http.server -d outputs/listen-001 9000                   # mở http://localhost:9000
 ```
 
-- Model streaming (`mode: streaming` trong `/v1/models`) được gọi bằng `stream_format=audio` + `response_format=pcm` để đo TTFB thật; script tự đóng gói WAV (`--sample-rate`, mặc định 24000). Model offline nhận `wav`.
+- Model streaming (`mode: streaming` trong `/v1/models`) được gọi bằng `stream_format=audio` + `response_format=pcm` để đo TTFB thật; script tự đóng gói WAV (`--sample-rate`, mặc định 48000 với model có `family: zerotts` trong `/v1/models`, 24000 với OmniVoice). Model offline nhận `wav`.
+- Với model ZeroTTS, script bỏ các ca clone (ZeroTTS không clone được, `zerotts_server` trả 400 cho `voice_ref`) và `--voice` là tên giọng preset (`maichi`, `quangminh`, …).
 - Mỗi request gửi đúng một lần, không retry. Stream đứt sau khi đã nhận audio thì kết quả là `stream_aborted` và không lưu file. WAV ghi qua file `.part` rồi rename.
 - Thư mục output đã có dữ liệu thì script từ chối; `--overwrite` xoá WAV và báo cáo cũ của script (giữ file khác) rồi chạy lại.
 - Console chỉ in id ca và chỉ số, không in văn bản. Exit code 1 khi có request không ra audio.
@@ -65,11 +66,11 @@ uv run python scripts/render_samples.py --set listening --out outputs/listen-asr
 
 ## Ca `normalize: false`
 
-Nhiều ca golden (nhóm `markup`, `short-sentences`, …) đặt `normalize: false` để kiểm tra riêng bước làm sạch, nên gửi nguyên `@`, `<`, `>` tới model, khác production (normalize bật). Trang HTML gắn nhãn `normalize: false` cho các ca này và cột `normalize` của `results.csv` ghi `false`. Muốn nghe chúng như production thì thêm `--normalize-on`: bỏ qua `normalize: false` của ca, `manifest.json` ghi `normalize_on: true`, nhãn HTML đổi thành "rendered with normalize on".
+Nhiều ca golden (nhóm `markup`, `short-sentences`, …) đặt `normalize: false` để kiểm tra riêng bước làm sạch, nên gửi nguyên `@`, `<`, `>` tới model, khác production (normalize bật). Trang HTML gắn nhãn `normalize: false` cho các ca này và cột `normalize` của `results.csv` ghi `false`. Thêm `--normalize-on` thì mọi ca gửi `text_processing.normalize: true`, ghi đè cả `normalize: false` của ca lẫn mặc định của model (ZeroTTS đang để `normalize = false`): cột `normalize` ghi `true`, `manifest.json` ghi `normalize_on: true`, nhãn HTML đổi thành "rendered with normalize on".
 
 ## Chạy tất cả model × giọng
 
-`scripts/render_all.py` gọi `render_samples.py` cho mọi (bộ câu, model, giọng): mặc định cả `golden` lẫn `listening`, mọi model TTS trong `/v1/models` (config mặc định chỉ có `g-omnivoice` và `g-omnivoice-stream`; muốn so nhiều model thì thêm entry theo [USAGE.md, mục 4.1.1](USAGE.md#411-thêm-lại-các-model-đã-bỏ)), mọi `voices/*.wav` có dòng trong `voices/prompt_text`.
+`scripts/render_all.py` gọi `render_samples.py` cho mọi (bộ câu, model, giọng): mặc định cả `golden` lẫn `listening`, mọi model TTS trong `/v1/models` (config mặc định chỉ có `g-omnivoice` và `g-omnivoice-stream`; muốn so nhiều model thì thêm entry theo [USAGE.md, mục 4.1.1](USAGE.md#411-thêm-lại-các-model-đã-bỏ)), mọi `voices/*.wav` có dòng trong `voices/prompt_text`. Model ZeroTTS lấy giọng từ `/v1/audio/voices` của gateway và không có run `_clone`.
 
 ```bash
 uv run python scripts/render_all.py --dry-run                      # xem kế hoạch
@@ -83,6 +84,32 @@ python -m http.server -d outputs/render-all-001 9000
 - Gộp kết quả: `all_results.csv` (mọi hàng `results.csv`, thêm `set`, `model`, `voice`, `run`), `summary.csv` (theo set, model, phía: số request, lỗi, cờ, số ca `words_missing`, `word_recall` trung bình, trung vị rtf/ttfb/thời lượng), `index.html` (link tới trang của từng run).
 - Tóm tắt nhiều giọng (cần ASR; biến `OMNIVOICE_ASR_*` được truyền xuống từng run): `voices.csv` theo (set, model, giọng, phía): số ca `words_missing` và `word_recall` trung bình, để chọn giọng nghe chính; `cases.csv` theo (set, model, ca, phía): số giọng mất chữ, `all_voices_missing` khi ca hỏng ở mọi giọng đã chấm. Cuối lượt chạy console in hai bảng này (giọng ít mất chữ nhất trước, run `_clone` sau cùng; chỉ ca mất chữ ở ít nhất một giọng, `ALL` = mọi giọng) và `index.html` có thêm hai bảng.
 - `--normalize-on` được truyền xuống `render_samples.py`.
+
+## A/B text pipeline cho ZeroTTS
+
+Lượt #9 so ba cấu hình engine text cho ZeroTTS, kết quả ở [báo cáo](reports/issue9-zerotts-text-pipeline-ab.md):
+
+| Biến thể | Gateway | Cờ render |
+| --- | --- | --- |
+| (a) toàn bộ pipeline | có lexicon | `--normalize-on` |
+| (b) guard + làm sạch markup | có lexicon (không dùng tới) | không cờ; lúc đo, ZeroTTS còn để mặc định `normalize = false` (nay đã bật, muốn đo lại thì đặt lại `normalize = false` cho model ZeroTTS trong config của gateway này) |
+| (c) như (a), bỏ lexicon tiếng Anh | `lexicon_path` để trống (mọi mục hiện có đều là tên tiếng Anh) | `--normalize-on` |
+
+Hai gateway trỏ cùng `zerotts_server`; mỗi biến thể × seed là một lần `render_all.py` (`--no-direct`, ASR bật), rồi `scripts/ab_report.py` chấm WER/CER theo nhóm ca:
+
+```bash
+export OMNIVOICE_ASR_URL=http://127.0.0.1:8090
+V="--model zerotts --voice maichi --voice quangminh --no-direct --seed 42"
+uv run python scripts/render_all.py --gateway http://127.0.0.1:8000 $V --normalize-on --out outputs/ab9/a-s42
+uv run python scripts/render_all.py --gateway http://127.0.0.1:8000 $V --out outputs/ab9/b-s42
+uv run python scripts/render_all.py --gateway http://127.0.0.1:8001 $V --normalize-on --out outputs/ab9/c-s42
+uv run python scripts/ab_report.py --variant a=outputs/ab9/a-s42 --variant b=outputs/ab9/b-s42 \
+    --variant c=outputs/ab9/c-s42 --out outputs/ab9/report     # lặp --variant a=… để gộp nhiều seed
+```
+
+- Tham chiếu của mỗi ca là input text qua toàn bộ pipeline tiếng Việt, một lần có lexicon và một lần không; hàng chấm theo tham chiếu gần hơn, nên `Google` đọc "gu gồ" hay "google" đều tính đúng. So từ chữ thường, bỏ dấu câu, tag và phiên âm CMU, gộp biến thể vùng miền (`ngàn` = `nghìn`, `tư` = `bốn`, `mốt` = `một`, `lẻ` = `linh`). Ca không phải tiếng Việt bị bỏ (ASR chỉ nghe tiếng Việt).
+- WER/CER tính trên cả tập: tổng lỗi chia tổng từ (hoặc ký tự, không tính khoảng trắng) của tham chiếu. Hàng không có audio hoặc không có transcript tính sai toàn bộ.
+- Tham chiếu là cách đọc của chính gateway, nên biến thể đọc khác mà vẫn đúng ("hai ngàn hai mươi bốn" cho 2024) vẫn bị trừ điểm. `cases.csv` xếp ca theo độ lệch WER giữa các biến thể: nghe những ca đầu bảng trước khi kết luận.
 
 ## Output
 

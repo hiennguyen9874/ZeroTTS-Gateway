@@ -6,7 +6,7 @@ A thin **gateway** in front of a TTS **upstream**. The upstream is migrating fro
 
 - Spec: issue #1, the ZeroTTS migration (`gh issue view 1 --json title,body,comments,labels,state`). Source of truth for the API contract, `zerotts_server` behaviour, error rules, and out-of-scope list. Read it before changing behaviour.
 - Slices are sub-issues #2–#11 with native GitHub blocked-by links; take one whose blockers are closed and read it with `gh issue view <n>`. `ready-for-human` slices (#9 A/B, #10 node benchmark) need a person for the final call.
-- Decisions already made: `docs/adr/0001-upstream-owns-chunking.md` (one upstream request per caller request; keep sentence punctuation), `docs/adr/0002-sea-g2p-normalizer.md` (sea-g2p `Normalizer`, `punc_norm=False`, and what the gateway must patch around it), `docs/adr/0004-short-text-speed.md` (superseded: OmniVoice-only `short_text_speed`, removed in #11), `docs/adr/0005-zerotts-replaces-omnivoice.md` (ZeroTTS replaces OmniVoice; why `zerotts_server` and not an audio.cpp port, ggml or GPU; voices, 48 kHz, rejected options, workers; normalizer off for ZeroTTS until the #9 A/B).
+- Decisions already made: `docs/adr/0001-upstream-owns-chunking.md` (one upstream request per caller request; keep sentence punctuation), `docs/adr/0002-sea-g2p-normalizer.md` (sea-g2p `Normalizer`, `punc_norm=False`, and what the gateway must patch around it), `docs/adr/0004-short-text-speed.md` (superseded: OmniVoice-only `short_text_speed`, removed in #11), `docs/adr/0005-zerotts-replaces-omnivoice.md` (ZeroTTS replaces OmniVoice; why `zerotts_server` and not an audio.cpp port, ggml or GPU; voices, 48 kHz, rejected options, workers; the #9 A/B turned the full text pipeline on for ZeroTTS, see `docs/reports/issue9-zerotts-text-pipeline-ab.md`).
 
 ## Conventions
 
@@ -24,7 +24,7 @@ A thin **gateway** in front of a TTS **upstream**. The upstream is migrating fro
 - `docs/ZEROTTS_SERVER.md`: running `zerotts_server`, weights download, config (`configs/zerotts_server.toml`), routes, rejected options.
 - `docs/DEPLOY.md`: Docker deployment shapes (gateway only, upstream only, both) via `COMPOSE_FILE`; `docker/zerotts_server.Dockerfile` + `compose.zerotts.yaml` (+ `compose.zerotts-stack.yaml`) run `zerotts_server` on CPU with weights from `scripts/download_zerotts.sh` mounted read-only; `docker/audiocpp.Dockerfile` builds audio.cpp from the pinned submodule.
 - `docs/TEXT_PIPELINE.md`: text pipeline behaviour, pronunciation lexicon, adding golden cases.
-- `docs/LISTENING.md`: `render_samples.py`/`render_all.py` listening runs, ASR scoring, output format.
+- `docs/LISTENING.md`: `render_samples.py`/`render_all.py` listening runs, ASR scoring, output format, and the ZeroTTS text pipeline A/B (`scripts/ab_report.py`).
 - `docs/MODEL_VOICE_RECOMMENDATIONS.md`: model/voice evaluation and recommended defaults.
 - OmniVoice-only until #11: `docs/INSTALL.md`, `docs/USAGE.md`, `configs/server.json`, `compose.audiocpp.yaml`, `compose.cpu.yaml`, `compose.stack.yaml`, `docker/audiocpp.Dockerfile`.
 - `configs/server.json` is the audio.cpp server config (model ids, `mode: streaming` entry); `configs/gateway.toml` is the gateway's per-model defaults.

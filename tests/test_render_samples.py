@@ -38,6 +38,18 @@ MODELS = {
         {"id": "g-omnivoice-stream", "object": "model", "task": "tts", "mode": "streaming"},
     ],
 }
+# zerotts_server's /v1/models, and the gateway's ZeroTTS defaults (configs/gateway.toml).
+ZEROTTS_MODELS = {
+    "object": "list",
+    "data": [
+        {"id": "zerotts", "object": "model", "family": "zerotts", "mode": "offline"},
+        {"id": "zerotts-stream", "object": "model", "family": "zerotts", "mode": "streaming"},
+    ],
+}
+ZEROTTS_DEFAULTS = {
+    model: ModelDefaults(language="vi", normalize=False, nonverbal_tags=False)
+    for model in ("zerotts", "zerotts-stream")
+}
 
 
 def pcm(*parts: tuple[float, int]) -> bytes:
@@ -556,7 +568,7 @@ def test_normalize_false_cases_are_marked_and_can_render_as_production(run, upst
 
     assert result.returncode == 0, result.stderr
     [row] = read_rows(out)
-    assert row["normalize"] == ""
+    assert row["normalize"] == "true"
     assert "@" not in row["engine_text"]  # normalized as in production
     assert upstream.last_json()["input"] == row["engine_text"] == row["sent_text"]
     assert json.loads((out / "manifest.json").read_text("utf-8"))["normalize_on"] is True
@@ -637,3 +649,89 @@ def test_render_all_summarizes_missing_words_by_voice_and_case(
     assert re.search(r"tag-control\s+1/2\n", console)
     page = (out / "index.html").read_text("utf-8")
     assert "By voice" in page and "By case" in page
+
+
+def test_zerotts_stream_renders_48k_without_clone_cases(
+    live_gateway, live_upstream, upstream, tmp_path
+):
+    upstream.on("GET", "/v1/models", lambda r: httpx.Response(200, json=ZEROTTS_MODELS))
+    audio = b"".join(
+        (1000 if i % 2 == 0 else -1000).to_bytes(2, "little", signed=True) for i in range(48000)
+    )  # 1 s at 48 kHz
+    upstream.on("POST", SPEECH, speaker(lambda body: odd_chunks(audio)))
+    gateway = live_gateway(models=ZEROTTS_DEFAULTS)
+    out = tmp_path / "out"
+    command = [
+        sys.executable, str(SCRIPT), "--gateway", gateway, "--upstream", live_upstream,
+        "--set", "listening", "--model", "zerotts-stream", "--voice", "maichi", "--out", str(out),
+    ]  # fmt: skip
+
+    result = subprocess.run(command, capture_output=True, text=True, timeout=300, env=script_env())
+
+    assert result.returncode == 0, result.stderr
+    rows = read_rows(out)
+    # ZeroTTS cannot clone, so clone cases are not rendered and nothing sends voice_ref.
+    voiced = [c["id"] for c in LISTENING if "clone" not in c]
+    assert [r["case_id"] for r in rows] == [i for i in voiced for _ in ("gateway", "direct")]
+    for row in rows:
+        assert row["result"] == "audio", row
+        assert float(row["duration_s"]) == 1.0  # streamed PCM read at 48 kHz, not 24 kHz
+        with wave.open(str(out / row["file"])) as w:
+            assert w.getframerate() == 48000
+    sent = [json.loads(r.content) for r in upstream.calls("POST", SPEECH)]
+    assert all("voice_ref" not in body and body["voice"] == "maichi" for body in sent)
+
+
+def test_normalize_on_overrides_a_model_default_of_normalize_off(
+    live_gateway, live_upstream, upstream, tmp_path
+):
+    upstream.on("GET", "/v1/models", lambda r: httpx.Response(200, json=ZEROTTS_MODELS))
+    upstream.on("POST", SPEECH, speaker(lambda body: [pcm((0.5, 1000))]))
+    gateway = live_gateway(models=ZEROTTS_DEFAULTS)
+    case = next(c for c in AUDIO_CASES if c["id"] == "vi-money-dong")
+
+    def render(*args: str) -> dict:
+        out = tmp_path / str(len(args))
+        command = [
+            sys.executable, str(SCRIPT), "--gateway", gateway, "--no-direct",
+            "--model", "zerotts", "--voice", "maichi", "--id", case["id"], "--out", str(out),
+        ]  # fmt: skip
+        result = subprocess.run([*command, *args], capture_output=True, text=True, timeout=300)
+        assert result.returncode == 0, result.stderr
+        [row] = read_rows(out)
+        return row
+
+    # The model default (normalize = false) gives cleanup only; --normalize-on the full pipeline.
+    row = render()
+    assert (row["normalize"], row["engine_text"]) == ("", case["input"])
+    row = render("--normalize-on")
+    assert (row["normalize"], row["engine_text"]) == ("true", case["expected"])
+    assert upstream.last_json()["input"] == case["expected"]
+
+
+def test_render_all_takes_zerotts_voices_from_the_upstream_and_plans_no_clone_run(
+    live_gateway, live_upstream, upstream, tmp_path
+):
+    upstream.on("GET", "/v1/models", lambda r: httpx.Response(200, json=ZEROTTS_MODELS))
+    upstream.on(
+        "GET", "/v1/audio/voices", lambda r: httpx.Response(200, json={"voices": ["b", "a"]})
+    )
+    upstream.on("POST", SPEECH, speaker(lambda body: [pcm((0.5, 1000))]))
+    gateway = live_gateway(models=ZEROTTS_DEFAULTS)
+    out = tmp_path / "all"
+    command = [
+        sys.executable, str(ROOT / "scripts" / "render_all.py"), "--gateway", gateway,
+        "--upstream", live_upstream, "--set", "listening", "--model", "zerotts",
+        "--no-direct", "--out", str(out),
+    ]  # fmt: skip
+
+    result = subprocess.run(command, capture_output=True, text=True, timeout=300, env=script_env())
+
+    assert result.returncode == 0, result.stderr
+    assert sorted(p.name for p in (out / "listening" / "zerotts").iterdir()) == ["a", "b"]
+    voiced = [c["id"] for c in LISTENING if "clone" not in c]
+    for voice in ("a", "b"):
+        rows = read_rows(out / "listening" / "zerotts" / voice)
+        assert [r["case_id"] for r in rows] == voiced
+    sent = [json.loads(r.content) for r in upstream.calls("POST", SPEECH)]
+    assert sorted({body["voice"] for body in sent}) == ["a", "b"]
