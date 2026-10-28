@@ -17,5 +17,6 @@ wheels/
 /outputs/
 /.vscode/
 voices_candidates/
+# Unregistered local reference clones stay ignored; pinned submodules are tracked.
 /references/
 /.pi-last-response.md

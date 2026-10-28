@@ -14,7 +14,7 @@ A thin **gateway** in front of a TTS **upstream**. The upstream is `zerotts_serv
 - Docs, ADRs, and issues are written in Vietnamese; code and code comments in English.
 - Tests go through HTTP APIs only. Gateway: fake upstream injected via `httpx` transport (`create_app(settings, transport=...)`). `zerotts_server`: fake engine injected (`create_app(settings, engine=...)`), plus one opt-in smoke test on the real model, skipped unless weights are in `models/`. Test only observable behaviour (status, body, headers, what the fake upstream received). Pipeline goldens go through `POST /v1/text/normalize`; each case carries a `why`, and known-wrong outputs stay as marked known issues. Every mis-reading fix adds a golden.
 - Error bodies use audio.cpp's shape `{"error":{"message","type"}}`; `message` never contains request text. Logs never contain text or audio.
-- `references/` holds read-only clones: never edit them. `audio.cpp`, `sea-g2p`, `OmniVoice`, `VieNeu-TTS`, `gipformer`, `vietnormalizer` are git submodules pinned to the commits the gateway was built against (`git submodule update --init`); bump a pin only on purpose, in its own commit. Other entries (HF model repos, `llm-wiki`, …) stay gitignored local clones. `models/` and `voices_candidates/` are gitignored local artifacts.
+- `references/` holds read-only git submodules: `ZeroTTS-repo`, `audio.cpp`, `sea-g2p`, `gipformer`, `vietnormalizer`, and `llm-wiki`. Initialize with `git submodule update --init` (no `--remote` or `--recursive` needed); bump a pin only on purpose, in its own commit. They are development references, not runtime dependencies. HF model clones and retired engines have been removed; download weights into gitignored `models/`, not `references/`. See `docs/REFERENCES.md` for the keep/remove audit and revisions. `voices_candidates/` also remains gitignored.
 
 ## Local runtime docs
 
@@ -27,46 +27,28 @@ A thin **gateway** in front of a TTS **upstream**. The upstream is `zerotts_serv
 
 ## References
 
-All under `references/` unless a URL.
+All six directories under `references/` are pinned submodules. The full inventory and removal rationale are in [docs/REFERENCES.md](docs/REFERENCES.md).
 
-### Upstream runtime
+### Upstream and API contract
 
-- `audio.cpp`: the OmniVoice upstream, and the API contract `zerotts_server` mirrors. C++/ggml multi-model audio engine with an OpenAI-style HTTP server; pinned at commit `65df584a`. It cannot load ZeroTTS (ADR 0005). Reach for it when the gateway contract or upstream behaviour is in question:
-  - `app/server/api.md`, `app/server/README.md`: route schemas, error format, streaming formats, `voice_ref`. The contract the gateway mirrors.
-  - `docs/models/omnivoice.md`: OmniVoice request/session options, streaming, non-verbal tags.
-  - `docs/reports/omnivoice_weight_type_benchmark.md`: f16 vs bf16 vs q8_0 speed (why f16 is the default).
-  - `src/models/omnivoice/session.cpp`: long-text chunking and chunk-0 voice reuse (the basis of ADR 0001).
-- vLLM-Omni OmniVoice serving: https://docs.vllm.ai/projects/vllm-omni/en/latest/user_guide/examples/online_serving/text_to_speech/#omnivoice. An alternative upstream; read only when comparing serving options.
-
-### OmniVoice model
-
-- `OmniVoice`: k2-fsa's Python reference implementation. `docs/generation-parameters.md`, `docs/voice-design.md` (design attributes), `docs/tips.md`; `omnivoice/` for the original text handling, tags, and chunking.
-- `OmniVoice-hf`: base checkpoint `k2-fsa/OmniVoice` (Qwen3-0.6B backbone + audio tokenizer). Source for the audio.cpp GGUF in `models/audio.cpp-gguf/`.
-- `g-omnivoice-hf`: `g-group-ai-lab/g-omnivoice`, Vietnamese finetune with lowest WER at base-level speaker similarity; its card says to normalize text before synthesis. Served as `g-omnivoice` / `g-omnivoice-stream`.
-- `omnivoice-vietnamese-hf`: `splendor1811/omnivoice-vietnamese`, Vietnamese finetune on 1,000 h of dolly-vn data; no bundled audio tokenizer (reuses the base one). Served as `omnivoice-vietnamese`.
+- `ZeroTTS-repo`: source of the `zerotts==0.1.5` dependency. The reference pin is five commits after tag `v0.1.5`, with no changes to `src/zerotts/`; it does not change the installed package. Read `src/zerotts/synthesizer.py` for generation and streaming, `src/zerotts/chunking.py` for sentence splitting, `webui/engine.py` for multi-segment streaming, and `docs/RUNTIME.md` / `docs/VOICES.md` for graph and voice-pack contracts.
+- `audio.cpp`: retained only as the API contract that `zerotts_server` mirrors, pinned at `65df584a`; not an upstream to deploy. Read `app/server/api.md` and `app/server/README.md` for route schemas, errors, SSE and PCM streaming. Historical ADR/report citations into `src/models/omnivoice/` remain valid. It cannot load ZeroTTS (ADR 0005).
 
 ### ASR for listening runs
 
-- `gipformer`: g-group-ai-lab's Vietnamese ASR code; `infer_onnx.py` shows the sherpa-onnx transducer setup that `scripts/asr_server.py` mirrors.
-- `gipformer1.5-68M-rnnt`: the model card and config only (ONNX files are Git LFS pointers); download the files into `models/gipformer1.5-68M-rnnt` (`docs/LISTENING.md`, "Chấm bằng ASR").
+- `gipformer`: `infer_onnx.py` shows the sherpa-onnx transducer setup mirrored by `scripts/asr_server.py`. Download ASR weights into `models/gipformer1.5-68M-rnnt`; no HF clone is needed (see `docs/REFERENCES.md`).
 
 ### Vietnamese text processing
 
-- `sea-g2p`: the chosen normalizer (ADR 0002). Rust core with Python bindings and a C ABI; use `Normalizer("vi")`, not the G2P/phonemizer path. Read `python/` and `src/` when debugging a mis-reading or a known issue.
-- `vietnormalizer`: rejected normalizer, still useful as a source of English→Vietnamese loanword and acronym dictionaries (`vietnormalizer/data/*.csv`, larger 20k list in `public/`) for the pronunciation lexicon.
-- `VieNeu-TTS`: Vietnamese TTS that uses sea-g2p; reference for how sea-g2p output is fed to a model and for streaming design.
-- `llm-wiki`: personal speech knowledge base (Vietnamese). Read when designing a pipeline rule:
-  - `outputs/chuong-19-cau-text-to-speech-chunker-normalizer-lexicon.md`: chunker, normalizer, lexicon design.
-  - `outputs/chuong-05-ngu-am-chu-viet-va-van-ban-tieng-viet.md`: Vietnamese phonology and orthography.
-  - `outputs/chuong-13-tts-tu-van-ban-toi-waveform.md`: TTS from text to waveform.
-  - `outputs/survey-cau-text-to-speech-tien-hau-xu-ly-sau-llm.md`: survey of pre/post-processing between LLM output and TTS.
-  - `outputs/lua-chon-va-thiet-ke-tts-tieng-viet-realtime.md`: Vietnamese realtime TTS model selection (incl. OmniVoice, G-OmniVoice).
+- `sea-g2p`: the chosen normalizer (ADR 0002). Use `Normalizer("vi")`, not the G2P/phonemizer path. Read `python/` and `src/` when debugging mis-readings or known issues.
+- `vietnormalizer`: not a runtime normalizer; retained as a source of English→Vietnamese loanword and acronym dictionaries (`vietnormalizer/data/*.csv`, larger list in `public/`) for the pronunciation lexicon.
+- `llm-wiki`: Vietnamese speech knowledge base, retained for pipeline design. Relevant files under `outputs/`:
+  - `chuong-19-cau-text-to-speech-chunker-normalizer-lexicon.md`
+  - `chuong-05-ngu-am-chu-viet-va-van-ban-tieng-viet.md`
+  - `chuong-13-tts-tu-van-ban-toi-waveform.md`
+  - `survey-cau-text-to-speech-tien-hau-xu-ly-sau-llm.md`
+  - `lua-chon-va-thiet-ke-tts-tieng-viet-realtime.md`
 
+### Weights
 
-### ZeroTTS (the new upstream model)
-
-Gitignored local clones, not submodules. ZeroTTS is a 202M Vietnamese TTS (text encoder + cross-attention global decoder + 17-step local depth decoder, MOSS-Audio-Tokenizer-Nano codec, 48 kHz, 12.5 frames/s). Voices are preset latents (10×768); the release has no voice encoder, so no cloning.
-
-- `ZeroTTS`: HF repo `zeroweight-ai/ZeroTTS` with the ONNX graphs, `config.json`, `tokenizer.json`, and `voices/<name>/` packs. These are the weights `zerotts_server` loads; the ONNX files here are LFS pointers. Download with `hf download --local-dir`, because onnxruntime ≥ 1.25 rejects external data behind HF-cache symlinks.
-- `ZeroTTS-repo`: source of the `zerotts` pip package (pinned `0.1.5`). Read `src/zerotts/synthesizer.py` for the generation loop and `synthesize_stream`, `src/zerotts/chunking.py` for sentence splitting, `webui/engine.py` for multi-segment streaming, `docs/RUNTIME.md` for the graph contract, and `docs/VOICES.md` for voice packs.
-- `ZeroTTS-GGUF`: GGUF repack for ZeroTTS's own ggml/WASM runtime (`ZeroTTS-repo/cpp/`); audio.cpp cannot read it. It was rejected as an engine (ADR 0005) and is kept for comparison only.
+ZeroTTS ONNX graphs and preset voice packs come from `zeroweight-ai/ZeroTTS` on Hugging Face. Use `scripts/download_zerotts.sh` to download the pinned revision into `models/ZeroTTS` with real files: onnxruntime ≥ 1.25 rejects external data behind HF-cache symlinks. HF model clones, OmniVoice, VieNeu-TTS and ZeroTTS-GGUF are no longer kept in `references/`; historical evaluation results remain in ADRs and reports.

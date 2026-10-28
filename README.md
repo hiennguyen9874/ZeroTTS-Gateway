@@ -19,6 +19,8 @@ Docker và cấu hình từng cách triển khai: [docs/DEPLOY.md](docs/DEPLOY.m
 
 ## Ghi chú chuyển đổi từ OmniVoice
 
+Hướng dẫn từng bước, kiểm tra caller và rollback: [docs/MIGRATION.md](docs/MIGRATION.md).
+
 - Đổi model sang `zerotts` (offline) hoặc `zerotts-stream` (streaming); đổi voice sang tên voice pack ZeroTTS, ví dụ `maichi`. Voice mặc định do operator cấu hình. Xem [khuyến nghị](docs/MODEL_VOICE_RECOMMENDATIONS.md).
 - Audio là mono **48 kHz**, thay cho 24 kHz; caller PCM thô phải cập nhật sample rate.
 - `voice_ref`, `reference_text`, `instruct`/`instructions`, `speed`/`speaking_rate` khác 1 và các khóa `options` ngoài `seed` bị từ chối với `400 unsupported_option`. ZeroTTS không clone giọng. `speed: 1` vẫn được chấp nhận.
