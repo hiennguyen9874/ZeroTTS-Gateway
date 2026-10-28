@@ -64,3 +64,9 @@ All under `references/` unless a URL.
   - `outputs/chuong-13-tts-tu-van-ban-toi-waveform.md`: TTS from text to waveform.
   - `outputs/survey-cau-text-to-speech-tien-hau-xu-ly-sau-llm.md`: survey of pre/post-processing between LLM output and TTS.
   - `outputs/lua-chon-va-thiet-ke-tts-tieng-viet-realtime.md`: Vietnamese realtime TTS model selection (incl. OmniVoice, G-OmniVoice).
+
+
+### Zero TTS
+
+- `ZeroTTS`: Vietnamese Zero-Shot Text-to-Speech (TTS) with real-time streaming and voice cloning from seconds of audio. Fast, natural, and optimised for CPU inference
+- `ZeroTTS-repo`: github repo of ZeroTTS
