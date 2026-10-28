@@ -6,6 +6,7 @@ import io
 import json
 import logging
 import time
+import unicodedata
 import wave
 from contextlib import asynccontextmanager
 
@@ -13,7 +14,7 @@ import numpy as np
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response
 from starlette.exceptions import HTTPException as StarletteHTTPException
-from zerotts.chunking import chunk_text, clean_segment_punctuation, normalize_punctuation
+from zerotts.chunking import chunk_text
 
 from .config import Settings
 from .engine import SAMPLE_RATE, Engine, ZeroTTSEngine
@@ -94,12 +95,12 @@ def wav16(pcm: bytes) -> bytes:
 
 
 def split_segments(text: str) -> list[str]:
-    """zerotts's own long-form path (webui `get_text_segments`, minus its number normalizer).
-
-    Splits by sentence, then comma, then word, so each segment stays under MAX_SEGMENT_SEC.
-    """
-    chunks = chunk_text(normalize_punctuation(text), max_chunk_sec=MAX_SEGMENT_SEC)
-    return [s for s in map(clean_segment_punctuation, chunks) if s]
+    """Split by sentence, then comma, then word, without rewriting meaningful symbols."""
+    # Match the tokenizer's NFC normalization before measuring or splitting characters.
+    text = unicodedata.normalize("NFC", text)
+    if not any(char.isalnum() for char in text):
+        return []
+    return chunk_text(text, max_chunk_sec=MAX_SEGMENT_SEC)
 
 
 def create_app(settings: Settings, engine: Engine | None = None) -> FastAPI:

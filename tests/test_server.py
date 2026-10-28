@@ -6,6 +6,7 @@ import json
 import logging
 import threading
 import time
+import unicodedata
 import wave
 
 import numpy as np
@@ -199,9 +200,32 @@ def test_overlong_sentence_is_split_by_comma_then_word(client, engine, text):
 
     segments = engine.calls[0]["segments"]
     assert len(segments) > 1
-    assert all(len(s) <= MAX_SEGMENT_CHARS + 1 for s in segments)  # + the added end mark
+    assert all(len(s) <= MAX_SEGMENT_CHARS for s in segments)
     words = [w.strip(",.") for s in segments for w in s.split()]
     assert words == [w.strip(",.") for w in text.split()]
+
+
+@pytest.mark.parametrize("long_text", [False, True], ids=["short", "multi-segment"])
+def test_decomposed_vietnamese_matches_precomposed_segments(client, engine, long_text):
+    text = " ".join(SENTENCES) if long_text else "Tôi."
+    for value in (text, unicodedata.normalize("NFD", text)):
+        assert client.post(SPEECH, json=speech_body(input=value)).status_code == 200
+
+    assert engine.calls[0]["segments"] == engine.calls[1]["segments"]
+    assert " ".join(engine.calls[1]["segments"]) == text
+
+
+@pytest.mark.parametrize("text", ["C++", "1+1", "Tôi dùng C++; kiểm tra 1+1 = 2."])
+@pytest.mark.parametrize("long_text", [False, True], ids=["short", "multi-segment"])
+def test_chunking_preserves_meaningful_symbols(client, engine, text, long_text):
+    if long_text:
+        text = " ".join([text] * 100)
+
+    assert client.post(SPEECH, json=speech_body(input=text)).status_code == 200
+
+    segments = engine.calls[0]["segments"]
+    assert len(segments) > 1 if long_text else len(segments) == 1
+    assert " ".join(segments) == text
 
 
 def test_input_with_no_speakable_text_is_400(client, engine):
