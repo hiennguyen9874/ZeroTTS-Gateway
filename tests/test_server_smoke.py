@@ -1,5 +1,6 @@
-"""Opt-in smoke test on the real ZeroTTS weights; skipped unless they are in models/ZeroTTS.
+"""Opt-in smoke test on local ZeroTTS weights (fp32 or int8).
 
+Uses ZEROTTS_SERVER_MODEL_DIR when set, otherwise models/ZeroTTS; skips if absent.
 Download the pinned weights: `uv run scripts/download_zerotts.sh` (ADR 0005).
 Run explicitly with `uv run python -m pytest -m real_model`.
 """
@@ -7,6 +8,7 @@ Run explicitly with `uv run python -m pytest -m real_model`.
 import base64
 import io
 import json
+import os
 import time
 import wave
 from pathlib import Path
@@ -18,13 +20,15 @@ from fastapi.testclient import TestClient
 from zerotts_server import create_app
 from zerotts_server.config import Settings
 
-MODEL_DIR = Path(__file__).parent.parent / "models" / "ZeroTTS"
+MODEL_DIR = Path(
+    os.environ.get("ZEROTTS_SERVER_MODEL_DIR", Path(__file__).parent.parent / "models" / "ZeroTTS")
+)
 
 pytestmark = [
     pytest.mark.real_model,
     pytest.mark.skipif(
         not (MODEL_DIR / "onnx" / "prefix_step.onnx").is_file(),
-        reason="ZeroTTS weights not in models/ZeroTTS",
+        reason=f"ZeroTTS weights not in {MODEL_DIR}",
     ),
 ]
 

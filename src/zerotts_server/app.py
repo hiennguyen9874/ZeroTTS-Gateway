@@ -11,6 +11,7 @@ import unicodedata
 import wave
 from collections.abc import AsyncIterator, Callable, Iterator
 from contextlib import asynccontextmanager, suppress
+from pathlib import Path
 
 import numpy as np
 from fastapi import FastAPI, Request
@@ -235,6 +236,16 @@ def create_app(settings: Settings, engine: Engine | None = None) -> FastAPI:
     def load() -> None:
         start = time.perf_counter()
         try:
+            fields = {"model_dir": str(settings.model_dir), "weights": "fp32"}
+            manifest_path = Path(settings.model_dir) / "quantization.json"
+            if manifest_path.is_file():
+                manifest = json.loads(manifest_path.read_text())
+                fields.update(
+                    weights="int8",
+                    source_revision=manifest["source_revision"],
+                    sha256={name: graph["sha256"] for name, graph in manifest["graphs"].items()},
+                )
+            log.info("weights", extra={"fields": fields})
             for worker in dict.fromkeys(engines):
                 worker.load()
             voices = engine.voices()

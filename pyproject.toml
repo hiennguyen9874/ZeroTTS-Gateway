@@ -40,6 +40,10 @@ addopts = '-m "not real_model"'
 markers = ["real_model: runs the real ZeroTTS weights from models/ (skipped when absent)"]
 
 [dependency-groups]
+quantize = [
+    "onnx==1.20.1",
+    "onnxruntime==1.31.1",
+]
 asr = [
     "numpy>=2.5.4",
     "python-multipart>=0.0.32",

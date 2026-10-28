@@ -438,6 +438,35 @@ def test_failed_load_keeps_health_503(make_client):
         assert_error(client.post(SPEECH, json=speech_body()), 503, "model_load_failed")
 
 
+@pytest.mark.parametrize("quantized", [False, True])
+def test_startup_logs_weight_identity(make_client, tmp_path, caplog, quantized):
+    manifest = {
+        "source_revision": "c2bfbd67dc648cac455077333f7cf5c18a2e3bb4",
+        "graphs": {"onnx/prefix_step.onnx": {"sha256": "a" * 64}},
+    }
+    if quantized:
+        (tmp_path / "quantization.json").write_text(json.dumps(manifest))
+    caplog.set_level(logging.INFO, logger="zerotts_server")
+
+    client = make_client(model_dir=str(tmp_path))
+    assert client.get("/health").status_code == 200
+    models = client.get("/v1/models").json()
+    assert [m["id"] for m in models["data"]] == ["zerotts", "zerotts-stream"]
+    [record] = [r for r in caplog.records if r.getMessage() == "weights"]
+    assert record.fields == {
+        "model_dir": str(tmp_path),
+        "weights": "int8" if quantized else "fp32",
+        **(
+            {
+                "source_revision": manifest["source_revision"],
+                "sha256": {"onnx/prefix_step.onnx": "a" * 64},
+            }
+            if quantized
+            else {}
+        ),
+    }
+
+
 # --- request errors and logs ---------------------------------------------------
 
 

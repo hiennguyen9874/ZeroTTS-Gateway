@@ -16,6 +16,32 @@ docker compose ps                    # both "healthy"
 curl -f localhost:8000/ready
 ```
 
+## Opt-in int8
+
+fp32 is the default. Quantize on the **host**, never in the server image:
+
+```bash
+uv run --group quantize python scripts/quantize_zerotts.py \
+  --revision c2bfbd67dc648cac455077333f7cf5c18a2e3bb4
+```
+
+Set `model_dir = "../models/ZeroTTS-int8"` in `configs/zerotts_server.toml`,
+then restart the upstream. The existing compose mount of `./models` at
+`/srv/models` is read-only and includes both directories. Alternatively, pass
+`ZEROTTS_SERVER_MODEL_DIR=/srv/models/ZeroTTS-int8` in the container environment
+(a host shell variable alone is not forwarded by compose). On the host use
+`ZEROTTS_SERVER_MODEL_DIR=models/ZeroTTS-int8`. No engine or image change is needed.
+
+To disable int8, restore `model_dir = "../models/ZeroTTS"`, remove any model-dir
+environment override, and restart. Retain `quantization.json` beside the int8
+weights: startup logs identify the directory, weight type, source revision and
+graph hashes. Seed reproducibility is only within the same weights/runtime;
+fp32 and int8 produce different audio for the same seed. For multiple nodes,
+copy one complete int8 directory (including manifest), mounted read-only on
+each node, rather than relying on independent conversions. See
+`docs/agents/zerotts-server.md#opt-in-int8-host-only` and the
+`docs/reports/issue12-zerotts-int8.md` reproducibility check.
+
 ## Gotchas
 
 - In the stack overlay the gateway calls `http://zerotts:8080` and ignores `ZEROTTS_GATEWAY_UPSTREAM_URL`; it starts only after `zerotts` is healthy (model loaded and warmed up).

@@ -13,6 +13,43 @@ The server listens at once and loads plus warms up the model in the background; 
 
 `scripts/download_zerotts.sh` downloads the pinned HF revision into `models/ZeroTTS` with `hf download --local-dir`. Real files are required: onnxruntime ≥ 1.25 rejects external data behind HF-cache symlinks. Re-runs skip files already at the revision. To change revision: edit `REVISION`, re-download, run the real-model smoke test.
 
+### Opt-in int8 (host only)
+
+fp32 remains the default. ZeroTTS does not publish int8 weights on HF; create them
+from an already downloaded fp32 directory (no Hub access):
+
+```bash
+uv run --group quantize python scripts/quantize_zerotts.py \
+  --revision c2bfbd67dc648cac455077333f7cf5c18a2e3bb4
+ZEROTTS_SERVER_MODEL_DIR=models/ZeroTTS-int8 \
+  uv run zerotts-server --config configs/zerotts_server.toml
+```
+
+The script defaults to `--model models/ZeroTTS --dst models/ZeroTTS-int8`.
+`--revision` is required: supply the actual source HF commit, not a new label for
+old weights. When HF download metadata is present, it must agree with this commit.
+The output is self-contained (config, tokenizer, voices, codec), without HF cache
+metadata. Existing output is refused unless `--force` explicitly requests replacement;
+the source must be separate and stays untouched. Basic ORT graph folding precedes
+dynamic QInt8 MatMul quantization of text_encoder, prefix_step and local_frame_decode;
+codec stays fp32. Sizes and MatMulInteger counts are printed per hot graph.
+
+`quantization.json` records `source_revision`, `onnx_version`,
+`onnxruntime_version` and `graphs` (relative hot-graph paths with source/output SHA-256,
+MatMulInteger count and byte sizes). Startup logs one `weights` record with
+`model_dir` and `weights: fp32` or, when the manifest exists, `weights: int8`,
+source revision and output hashes. These are manifest identities, not a startup
+integrity scan. Keep the manifest with its weights. The engine and `/v1/models`
+are unchanged. The pinned `onnx` package is in the separate `quantize` dependency
+group, not the server extra or image.
+
+Seed reproducibility applies only to the **same weights** (and runtime).
+The same seed produces different audio with fp32 versus int8. Two quantizations
+on this dev machine produced identical hot-graph SHA-256 hashes; this does not
+guarantee equality across machines or versions. For multiple nodes, prefer copying
+one complete int8 directory. Evidence and reproduction:
+`docs/reports/issue12-zerotts-int8.md`.
+
 ## Workers and voices
 
 - Each worker holds its own model instance and runs one request at a time. With all busy, a request waits up to `busy_timeout`, then gets `503 server_busy` (before any stream starts). No retry; the gateway passes it through. A worker frees only when the engine stops: done, failed, or caller disconnect (after the audio piece in progress).
@@ -34,7 +71,7 @@ Audio is always mono 48 kHz 16-bit little-endian.
 
 - `voice`: missing → model's `default_voice`; unknown → `400 unknown_voice`.
 - `input` is NFC-normalized, then split by `zerotts`'s `chunk_text`: sentences grouped up to ~15 s (225 chars), overlong sentences split at commas, then words. Punctuation is never added or changed and meaningful symbols (`C++`, `1+1`) stay. Segments synthesize sequentially with one seeded RNG, joined by 0.15 s silence into one WAV. Nothing speakable left (`... !!`) → `400 invalid_request_error`.
-- `seed` or `options.seed`: integer in [0, 2^64), decimal string accepted; per-request RNG, never numpy's global one. Same seed, same audio.
+- `seed` or `options.seed`: integer in [0, 2^64), decimal string accepted; per-request RNG, never numpy's global one. Same seed and same weights/runtime, same audio; fp32 and int8 differ.
 - `400 unsupported_option`: `voice_ref`, `reference_text`, `instruct`, `instructions`, `speed`/`speaking_rate` other than 1, any `options` key except `seed`.
 - Mode mismatch (stream request to an offline model, or non-stream request to a streaming model) → `400 invalid_request_error`. audio.cpp would return WAV for the latter; spec #1 chose to reject.
 
@@ -52,4 +89,4 @@ One JSON line per request: model, voice, seed, char count, `segments`, `wait_ms`
 
 ## Tests
 
-`tests/test_server.py` uses a fake engine. `tests/test_server_smoke.py` (marker `real_model`) is deselected by default; run `uv run python -m pytest -m real_model`, which still skips without weights in `models/ZeroTTS`.
+`tests/test_server.py` uses a fake engine. `tests/test_server_smoke.py` (marker `real_model`) is deselected by default; run `uv run python -m pytest -m real_model`, which still skips without weights in `models/ZeroTTS` (or `ZEROTTS_SERVER_MODEL_DIR` when set). To check int8: `ZEROTTS_SERVER_MODEL_DIR=models/ZeroTTS-int8 uv run python -m pytest -m real_model tests/test_server_smoke.py`.
