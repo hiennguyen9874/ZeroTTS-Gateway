@@ -31,5 +31,5 @@ Ca golden nằm ở `tests/golden/pipeline.json`, chạy qua route dry-run. Mỗ
 1. Xem engine text hiện tại: `curl -s localhost:8000/v1/text/normalize -d '{"input":"…","language":"vi"}'`.
 2. Thêm một dòng: `id`, `group` (`numbers-money`, `dates-times`, `measurements`, `codes-phones`, `abbrev-english`, `reading-rules`, `markup`, `tags`, `input-errors`, `short-sentences`, `language`, …), `input`, tuỳ chọn `language` (mặc định `vi`) và `normalize`, rồi `expected` + `warnings` hoặc `error`, và `why` (vì sao đó là cách đọc đúng).
 3. Nếu tạm chấp nhận output sai (hành vi của sea-g2p chưa sửa), ghi output hiện tại vào `expected` và thêm `known_issue` mô tả chỗ sai; không xoá ca.
-4. Sửa luật hoặc thêm dòng vào từ điển. Đổi luật thì tăng `RULES_VERSION` trong `src/omnivoice_gateway/text.py`.
+4. Sửa luật hoặc thêm dòng vào từ điển. Đổi luật thì tăng `RULES_VERSION` trong `src/zerotts_gateway/text.py`.
 5. `uv run pytest`.

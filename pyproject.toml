@@ -1,5 +1,5 @@
 [project]
-name = "omnivoice-gateway"
+name = "zerotts-gateway"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
@@ -18,7 +18,7 @@ dependencies = [
 ]
 
 [project.scripts]
-omnivoice-gateway = "omnivoice_gateway:main"
+zerotts-gateway = "zerotts_gateway:main"
 
 [build-system]
 requires = ["uv_build>=0.12.9,<0.13.0"]

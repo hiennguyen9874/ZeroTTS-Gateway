@@ -6,7 +6,7 @@ import time
 import httpx
 import pytest
 
-from omnivoice_gateway.config import ModelDefaults, ShortTextSpeedRamp, load_settings
+from zerotts_gateway.config import ModelDefaults, ShortTextSpeedRamp, load_settings
 
 from .conftest import WAV
 
@@ -433,12 +433,12 @@ def test_short_text_speed_invalid_config_rejected(tmp_path, line):
 
 
 def test_short_text_speed_is_logged_without_text(make_client, upstream, caplog):
-    caplog.set_level(logging.INFO, logger="omnivoice_gateway")
+    caplog.set_level(logging.INFO, logger="zerotts_gateway")
     client = make_client(models=SLOW)
 
     client.post(SPEECH, json=speech_body(input="Bí mật."))
 
-    fields = [r for r in caplog.records if r.name == "omnivoice_gateway"][-1].fields
+    fields = [r for r in caplog.records if r.name == "zerotts_gateway"][-1].fields
     assert fields["short_text_speed"] == 0.7
     assert "Bí mật" not in caplog.text + json.dumps(fields, ensure_ascii=False)
 
@@ -502,14 +502,14 @@ def test_speed_bands_count_engine_text_and_log_selected_speed(
         "{max_syllables = 4, speed = 0.75}, {max_syllables = 5, speed = 0.65}]\n"
     )
     client = make_client(load_settings(config, env={}))
-    caplog.set_level(logging.INFO, logger="omnivoice_gateway")
+    caplog.set_level(logging.INFO, logger="zerotts_gateway")
 
     # Input is three words, engine text is five syllables; tags do not count.
     response = client.post(SPEECH, json=speech_body(input="[laughter] Có 41 người. [sigh]"))
 
     assert response.status_code == 200
     assert upstream.last_json()["speed"] == 0.65
-    fields = [r for r in caplog.records if r.name == "omnivoice_gateway"][-1].fields
+    fields = [r for r in caplog.records if r.name == "zerotts_gateway"][-1].fields
     assert fields["short_text_speed"] == 0.65
     assert "Có 41" not in caplog.text + json.dumps(fields, ensure_ascii=False)
 
@@ -594,7 +594,7 @@ def test_host_env_overrides_config(tmp_path):
     config.write_text('host = "127.0.0.1"\n')
 
     assert load_settings(config, env={}).host == "127.0.0.1"
-    assert load_settings(config, env={"OMNIVOICE_GATEWAY_HOST": "0.0.0.0"}).host == "0.0.0.0"
+    assert load_settings(config, env={"ZEROTTS_GATEWAY_HOST": "0.0.0.0"}).host == "0.0.0.0"
 
 
 def test_config_file_with_env_overrides(make_client, upstream, tmp_path):
@@ -604,9 +604,9 @@ def test_config_file_with_env_overrides(make_client, upstream, tmp_path):
         '[models.g-omnivoice]\nlanguage = "vi"\n'
     )
     env = {
-        "OMNIVOICE_GATEWAY_CONFIG": str(config),
-        "OMNIVOICE_GATEWAY_UPSTREAM_URL": "http://from-env.test:9000",
-        "OMNIVOICE_GATEWAY_API_KEY": "env-key",
+        "ZEROTTS_GATEWAY_CONFIG": str(config),
+        "ZEROTTS_GATEWAY_UPSTREAM_URL": "http://from-env.test:9000",
+        "ZEROTTS_GATEWAY_API_KEY": "env-key",
     }
     client = make_client(load_settings(env=env))
 
@@ -639,7 +639,7 @@ def test_config_lexicon_path_is_relative_to_config_file(make_client, tmp_path, m
 
 
 def test_logs_are_structured_and_contain_no_text(client, upstream, caplog):
-    caplog.set_level(logging.INFO, logger="omnivoice_gateway")
+    caplog.set_level(logging.INFO, logger="zerotts_gateway")
     secret_input = "Nội dung bí mật của người dùng"
     secret_ref = "Transcript bí mật của giọng mẫu"
 
@@ -652,7 +652,7 @@ def test_logs_are_structured_and_contain_no_text(client, upstream, caplog):
         ),
     )
 
-    records = [r for r in caplog.records if r.name == "omnivoice_gateway"]
+    records = [r for r in caplog.records if r.name == "zerotts_gateway"]
     assert records
     fields = records[-1].fields
     assert fields["path"] == SPEECH
@@ -672,14 +672,14 @@ def test_logs_are_structured_and_contain_no_text(client, upstream, caplog):
     ("method", "path"), [("POST", SPEECH), ("GET", "/v1/models"), ("GET", "/ready")]
 )
 def test_log_records_connect_timeout_without_text(make_client, upstream, caplog, method, path):
-    caplog.set_level(logging.INFO, logger="omnivoice_gateway")
+    caplog.set_level(logging.INFO, logger="zerotts_gateway")
     upstream.blackhole = True
     client = make_client(connect_timeout_s=0.05)
     secret = "Nội dung bí mật của người dùng"
 
     client.request(method, path, json=speech_body(input=secret) if method == "POST" else None)
 
-    records = [r for r in caplog.records if r.name == "omnivoice_gateway"]
+    records = [r for r in caplog.records if r.name == "zerotts_gateway"]
     fields = records[-1].fields
     assert fields["path"] == path
     assert fields["upstream_error"] == "connect_timeout"
@@ -796,14 +796,14 @@ def test_speed_ramp_counts_engine_text_and_logs_without_text(
     config = tmp_path / "gateway.toml"
     config.write_text(RAMP_TOML)
     client = make_client(load_settings(config, env={}))
-    caplog.set_level(logging.INFO, logger="omnivoice_gateway")
+    caplog.set_level(logging.INFO, logger="zerotts_gateway")
 
     # Twelve input words, but "41" reads as "bốn mươi mốt": 14 engine syllables. Tags don't count.
     text = "[laughter] Hôm nay lớp mình có 41 bạn đến học bài mới rồi. [sigh]"
     assert client.post(SPEECH, json=speech_body(input=text)).status_code == 200
 
     assert upstream.last_json()["speed"] == 0.636
-    fields = [r for r in caplog.records if r.name == "omnivoice_gateway"][-1].fields
+    fields = [r for r in caplog.records if r.name == "zerotts_gateway"][-1].fields
     assert fields["short_text_speed"] == 0.636
     assert "Hôm nay" not in caplog.text + json.dumps(fields, ensure_ascii=False)
 

@@ -19,7 +19,7 @@ from pathlib import Path
 import httpx
 import pytest
 
-from omnivoice_gateway.config import ModelDefaults, ShortTextSpeedBand
+from zerotts_gateway.config import ModelDefaults, ShortTextSpeedBand
 
 from .conftest import ScriptedStream
 

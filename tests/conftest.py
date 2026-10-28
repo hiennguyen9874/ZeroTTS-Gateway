@@ -13,8 +13,8 @@ import pytest
 import uvicorn
 from fastapi.testclient import TestClient
 
-from omnivoice_gateway import create_app
-from omnivoice_gateway.config import Settings
+from zerotts_gateway import create_app
+from zerotts_gateway.config import Settings
 
 UPSTREAM_URL = "http://upstream.test"
 WAV = b"RIFF\x24\x00\x00\x00WAVEfmt fake-audio-bytes"

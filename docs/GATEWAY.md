@@ -5,15 +5,15 @@ Gateway đứng trước audio.cpp (upstream) và giữ nguyên API của upstre
 ## Chạy trực tiếp
 
 ```bash
-uv run omnivoice-gateway --config configs/gateway.toml
+uv run zerotts-gateway --config configs/gateway.toml
 ```
 
 Biến môi trường:
 
-- `OMNIVOICE_GATEWAY_CONFIG`: đường dẫn config, dùng khi không truyền `--config`
-- `OMNIVOICE_GATEWAY_UPSTREAM_URL`: ghi đè `upstream_url`
-- `OMNIVOICE_GATEWAY_API_KEY`: đặt thì mọi route trừ `/health`, `/ready` yêu cầu `Authorization: Bearer <key>`
-- `OMNIVOICE_GATEWAY_HOST`: ghi đè `host` (địa chỉ lắng nghe)
+- `ZEROTTS_GATEWAY_CONFIG`: đường dẫn config, dùng khi không truyền `--config`
+- `ZEROTTS_GATEWAY_UPSTREAM_URL`: ghi đè `upstream_url`
+- `ZEROTTS_GATEWAY_API_KEY`: đặt thì mọi route trừ `/health`, `/ready` yêu cầu `Authorization: Bearer <key>`
+- `ZEROTTS_GATEWAY_HOST`: ghi đè `host` (địa chỉ lắng nghe)
 
 ## Route
 
@@ -43,14 +43,14 @@ Body lỗi theo dạng của audio.cpp: `{"error":{"message","type"}}`.
 Container chỉ chứa gateway. audio.cpp chạy trên host, ở máy riêng, hoặc trong container riêng cùng compose (`compose.audiocpp.yaml` + `compose.stack.yaml`): xem [DEPLOY.md](DEPLOY.md). Phần dưới là cách chỉ chạy gateway (`COMPOSE_FILE=compose.yaml`, mặc định).
 
 ```bash
-cp .env.example .env        # sửa OMNIVOICE_GATEWAY_UPSTREAM_URL, OMNIVOICE_GATEWAY_API_KEY
+cp .env.example .env        # sửa ZEROTTS_GATEWAY_UPSTREAM_URL, ZEROTTS_GATEWAY_API_KEY
 docker compose up -d --build
 curl localhost:8000/health  # 200
 curl localhost:8000/ready   # 200 khi tới được upstream, 503 khi không
 ```
 
 - `configs/` được mount read-only vào `/config`; gateway đọc `/config/gateway.toml` và từ điển theo `lexicon_path`. Sửa config hoặc từ điển rồi `docker compose restart`, không cần build lại.
-- Trong container gateway lắng nghe trên `0.0.0.0:8000` (image đặt `OMNIVOICE_GATEWAY_HOST=0.0.0.0`; `port` vẫn lấy từ config, đổi thì sửa cả `ports` trong `compose.yaml`). Cổng trên host: `GATEWAY_PORT`.
+- Trong container gateway lắng nghe trên `0.0.0.0:8000` (image đặt `ZEROTTS_GATEWAY_HOST=0.0.0.0`; `port` vẫn lấy từ config, đổi thì sửa cả `ports` trong `compose.yaml`). Cổng trên host: `GATEWAY_PORT`.
 - `127.0.0.1` trong container là chính container. audio.cpp trên host: dùng `http://host.docker.internal:8080` (mặc định, compose đã thêm `host-gateway`) và cho audio.cpp lắng nghe trên `0.0.0.0` thay vì `127.0.0.1`. audio.cpp ở máy khác: dùng host/IP của máy đó.
 - Image: `python:3.12-slim`, `uv sync --locked --no-dev`, chạy bằng user không phải root; `.dockerignore` chỉ cho vào `pyproject.toml`, `uv.lock`, `README.md`, `src/`.
 - Healthcheck của image gọi `/health` (gateway còn sống), không gọi `/ready`: upstream chết không làm Docker restart gateway. Load balancer nên kiểm tra `/ready`.

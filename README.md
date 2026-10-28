@@ -1,4 +1,4 @@
-# OmniVoice Gateway
+# ZeroTTS Gateway
 
 Gateway mỏng đứng trước audio.cpp chạy OmniVoice. Gateway giữ nguyên API của audio.cpp (`/v1/audio/speech`, `/v1/models`, `/v1/audio/voices`), nên caller chỉ cần đổi base URL. Gateway thêm:
 
@@ -27,7 +27,7 @@ references/audio.cpp/build/linux-cuda126-release/bin/audiocpp_server --config co
 **2. Chạy gateway** (cổng 8000, upstream `http://127.0.0.1:8080`):
 
 ```bash
-uv run omnivoice-gateway --config configs/gateway.toml
+uv run zerotts-gateway --config configs/gateway.toml
 ```
 
 Hoặc bằng Docker: `cp .env.example .env && docker compose up -d --build`. Mặc định chỉ chạy gateway; chạy cả audio.cpp trong Docker thì đặt `COMPOSE_FILE` trong `.env` (xem [docs/DEPLOY.md](docs/DEPLOY.md)).
@@ -45,7 +45,7 @@ curl -s localhost:8000/v1/text/normalize -H 'Content-Type: application/json' \
   -d '{"input":"Hẹn gặp lúc 8h30 ngày 25/12, phí 50k.","language":"vi"}'
 ```
 
-Đặt `OMNIVOICE_GATEWAY_API_KEY` thì mọi route trừ `/health`, `/ready` cần header `Authorization: Bearer <key>`. Tắt chuẩn hoá cho một request: thêm `"text_processing": {"normalize": false}`.
+Đặt `ZEROTTS_GATEWAY_API_KEY` thì mọi route trừ `/health`, `/ready` cần header `Authorization: Bearer <key>`. Tắt chuẩn hoá cho một request: thêm `"text_processing": {"normalize": false}`.
 
 ## Chọn model và giọng
 

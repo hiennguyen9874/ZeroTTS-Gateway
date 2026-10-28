@@ -24,9 +24,9 @@ class JsonFormatter(logging.Formatter):
 def main() -> None:
     import uvicorn
 
-    parser = argparse.ArgumentParser(prog="omnivoice-gateway")
+    parser = argparse.ArgumentParser(prog="zerotts-gateway")
     parser.add_argument(
-        "--config", help="path to the gateway TOML config (default: $OMNIVOICE_GATEWAY_CONFIG)"
+        "--config", help="path to the gateway TOML config (default: $ZEROTTS_GATEWAY_CONFIG)"
     )
     settings = load_settings(parser.parse_args().config)
 

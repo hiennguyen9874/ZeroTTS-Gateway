@@ -15,7 +15,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from . import text as pipeline
 from .config import ModelDefaults, Settings
 
-log = logging.getLogger("omnivoice_gateway")
+log = logging.getLogger("zerotts_gateway")
 
 READY_TIMEOUT_S = 5.0
 

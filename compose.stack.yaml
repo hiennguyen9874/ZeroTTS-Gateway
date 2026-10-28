@@ -4,8 +4,8 @@
 services:
   gateway:
     environment:
-      # Overrides OMNIVOICE_GATEWAY_UPSTREAM_URL from .env.
-      OMNIVOICE_GATEWAY_UPSTREAM_URL: http://audiocpp:8080
+      # Overrides ZEROTTS_GATEWAY_UPSTREAM_URL from .env.
+      ZEROTTS_GATEWAY_UPSTREAM_URL: http://audiocpp:8080
     depends_on:
       audiocpp:
         condition: service_healthy

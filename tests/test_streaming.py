@@ -131,14 +131,14 @@ def test_deadline_mid_stream_aborts_caller(live_gateway, upstream):
 
 
 def test_stream_log_has_ttfb_and_total_without_text(client, upstream, caplog):
-    caplog.set_level(logging.INFO, logger="omnivoice_gateway")
+    caplog.set_level(logging.INFO, logger="zerotts_gateway")
     secret = "Nội dung bí mật của người dùng"
     upstream.stream(0.05, b"\x01", 0.1, b"\x02")
 
     response = client.post(SPEECH, json={**BODY, "input": secret})
 
     assert response.content == b"\x01\x02"
-    fields = [r.fields for r in caplog.records if r.name == "omnivoice_gateway"][-1]
+    fields = [r.fields for r in caplog.records if r.name == "zerotts_gateway"][-1]
     assert fields["status"] == 200
     assert 50 <= fields["upstream_ttfb_ms"] < fields["total_ms"]
     assert fields["total_ms"] >= 150
@@ -154,7 +154,7 @@ def test_stream_log_has_ttfb_and_total_without_text(client, upstream, caplog):
     ],
 )
 def test_stream_log_records_abort_reason(make_client, upstream, caplog, steps, stream_end):
-    caplog.set_level(logging.INFO, logger="omnivoice_gateway")
+    caplog.set_level(logging.INFO, logger="zerotts_gateway")
     upstream.stream(*steps)
     client = make_client(deadline_s=0.3)
 
@@ -162,5 +162,5 @@ def test_stream_log_records_abort_reason(make_client, upstream, caplog, steps, s
     with pytest.raises(Exception):  # noqa: B017
         client.post(SPEECH, json=BODY)
 
-    fields = [r.fields for r in caplog.records if r.name == "omnivoice_gateway"][-1]
+    fields = [r.fields for r in caplog.records if r.name == "zerotts_gateway"][-1]
     assert fields["stream_end"] == stream_end

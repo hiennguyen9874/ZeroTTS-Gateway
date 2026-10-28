@@ -31,7 +31,7 @@ Mọi lệnh dưới đây chạy từ thư mục gốc repo; `docker compose` �
 ```bash
 cp .env.example .env
 # .env: COMPOSE_FILE=compose.yaml:compose.audiocpp.yaml:compose.stack.yaml:compose.cpu.yaml
-#       OMNIVOICE_GATEWAY_API_KEY=<key nếu mở ra mạng>
+#       ZEROTTS_GATEWAY_API_KEY=<key nếu mở ra mạng>
 docker compose config        # không còn reservation thiết bị NVIDIA
 docker compose up -d --build
 docker compose ps
@@ -63,14 +63,14 @@ Nếu hết deadline 300 giây, kiểm tra log và cân nhắc tăng `deadline_s
 ```bash
 cp .env.example .env
 # .env: COMPOSE_FILE=compose.yaml:compose.audiocpp.yaml:compose.stack.yaml
-#       AUDIOCPP_GPU=<GPU trống>, OMNIVOICE_GATEWAY_API_KEY=<key>
+#       AUDIOCPP_GPU=<GPU trống>, ZEROTTS_GATEWAY_API_KEY=<key>
 docker compose build          # lần đầu build audio.cpp (CUDA, chỉ OmniVoice)
 docker compose up -d
 docker compose ps             # audiocpp và gateway đều "healthy"
 curl localhost:8000/ready     # 200
 ```
 
-- Gateway gọi audio.cpp qua `http://audiocpp:8080` (mạng compose); `OMNIVOICE_GATEWAY_UPSTREAM_URL` trong `.env` bị bỏ qua.
+- Gateway gọi audio.cpp qua `http://audiocpp:8080` (mạng compose); `ZEROTTS_GATEWAY_UPSTREAM_URL` trong `.env` bị bỏ qua.
 - audio.cpp vẫn được publish ở `127.0.0.1:8080` của host, để `scripts/render_samples.py` (phía B gọi thẳng upstream), `curl` debug và các lệnh trong [USAGE.md](USAGE.md) chạy như cũ. Caller chỉ nên gọi gateway.
 
 ## Chỉ audio.cpp (máy GPU riêng)
@@ -82,7 +82,7 @@ docker compose up -d --build
 curl localhost:8080/health
 ```
 
-Trên máy chạy gateway: `COMPOSE_FILE=compose.yaml`, `OMNIVOICE_GATEWAY_UPSTREAM_URL=http://<máy-gpu>:8080`.
+Trên máy chạy gateway: `COMPOSE_FILE=compose.yaml`, `ZEROTTS_GATEWAY_UPSTREAM_URL=http://<máy-gpu>:8080`.
 
 audio.cpp không có auth và đọc file theo `voice_ref` (gateway chặn `voice_ref` dạng đường dẫn, gọi thẳng upstream thì không). Chỉ mở `AUDIOCPP_BIND` ra mạng tin cậy và dùng firewall chỉ cho máy gateway vào.
 

@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from omnivoice_gateway.config import ModelDefaults, Settings, load_settings
+from zerotts_gateway.config import ModelDefaults, Settings, load_settings
 
 from .conftest import UPSTREAM_URL
 from .test_gateway import assert_error
@@ -307,7 +307,7 @@ def test_speech_reports_lexicon_pipeline_version(lexicon_client):
     ],
 )
 def test_invalid_lexicon_fails_at_startup(tmp_path, rows):
-    from omnivoice_gateway import create_app
+    from zerotts_gateway import create_app
 
     path = tmp_path / "lexicon.csv"
     path.write_text(rows, encoding="utf-8")

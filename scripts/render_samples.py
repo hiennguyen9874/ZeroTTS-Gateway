@@ -653,13 +653,13 @@ def render_html(samples: list[Sample], manifest: dict) -> str:
         if manifest["asr"]
         else ""
     )
-    return f"""<!doctype html><meta charset="utf-8"><title>OmniVoice gateway samples</title>
+    return f"""<!doctype html><meta charset="utf-8"><title>ZeroTTS gateway samples</title>
 <style>body{{font-family:sans-serif;margin:1em}}table{{border-collapse:collapse}}
 td,th{{border:1px solid #ccc;padding:4px;vertical-align:top}}
 pre{{white-space:pre-wrap;margin:0;max-width:28em}}.bad{{color:#b00}}
 .muted{{color:#666;font-size:.8em;max-width:22em}}.asr{{font-size:.85em;max-width:22em}}
 .warn{{background:#fff3cd;font-size:.8em;max-width:14em;padding:2px}}</style>
-<h1>OmniVoice gateway samples</h1><p>{e(meta)}</p>
+<h1>ZeroTTS gateway samples</h1><p>{e(meta)}</p>
 <p class="muted">Flags are hints, not a quality verdict. Record review results in results.csv.
 {e(asr_note)}</p>
 <table><tr><th>case</th><th>input text</th><th>engine text</th>{head}</tr>
