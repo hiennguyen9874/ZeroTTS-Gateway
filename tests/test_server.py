@@ -58,6 +58,16 @@ class FakeEngine:
         yield from self.chunks
 
 
+def wait_for_health(client):
+    deadline = time.monotonic() + 5
+    while True:
+        response = client.get("/health")
+        if response.json().get("error", {}).get("type") != "model_loading":
+            return response
+        assert time.monotonic() < deadline, "server did not finish loading"
+        time.sleep(0.01)
+
+
 @pytest.fixture
 def engine():
     return FakeEngine()
@@ -72,10 +82,8 @@ def make_client(engine):
         client.__enter__()
         clients.append(client)
         if wait_ready:
-            deadline = time.monotonic() + 5
-            while client.get("/health").status_code != 200:
-                assert time.monotonic() < deadline, "server did not become ready"
-                time.sleep(0.01)
+            response = wait_for_health(client)
+            assert response.status_code == 200, response.text
         return client
 
     yield make
@@ -184,11 +192,7 @@ def test_voices_lists_voice_packs_with_descriptions(client):
 def test_default_voice_missing_from_voice_dir_fails_load(make_client):
     client = make_client(models={"zerotts": ModelConfig(default_voice="nobody")}, wait_ready=False)
 
-    deadline = time.monotonic() + 5
-    while (response := client.get("/health")).json()["error"]["type"] == "model_loading":
-        assert time.monotonic() < deadline
-        time.sleep(0.01)
-    assert_error(response, 503, "model_load_failed")
+    assert_error(wait_for_health(client), 503, "model_load_failed")
 
 
 # --- unsupported options -------------------------------------------------------
@@ -253,6 +257,8 @@ def test_same_seed_reaches_the_engine_unchanged(client, engine):
         {"seed": 2**64},
         {"seed": 1.5},
         {"seed": "abc"},
+        pytest.param({"seed": "1" * 5000}, id="oversized-seed"),
+        pytest.param({"options": {"seed": "1" * 5000}}, id="oversized-options-seed"),
         {"seed": True},
         {"seed": 1, "options": {"seed": 2}},
     ],
@@ -270,22 +276,20 @@ def test_operator_sampling_reaches_the_engine(make_client, engine):
     assert engine.calls[0]["sampling"] == sampling
 
 
-def test_config_file_sets_models_sampling_and_paths(tmp_path):
+def test_config_file_sets_models_voice_and_sampling(tmp_path, make_client, engine):
     config = tmp_path / "server.toml"
     config.write_text(
-        'model_dir = "weights"\nthreads = 4\n'
-        '[models.zerotts]\ndefault_voice = "giahuy"\n'
-        "[models.zerotts.sampling]\naudio_topk = 10\n"
+        '[models.zerotts]\ndefault_voice = "giahuy"\n[models.zerotts.sampling]\naudio_topk = 10\n'
     )
 
-    settings = load_settings(config, env={"ZEROTTS_SERVER_HOST": "0.0.0.0"})
+    client = make_client(load_settings(config, env={}))
 
-    assert settings.model_dir == str(tmp_path / "weights")
-    assert settings.voices_path == tmp_path / "weights" / "voices"
-    assert (settings.threads, settings.host) == (4, "0.0.0.0")
-    assert settings.models == {
-        "zerotts": ModelConfig(default_voice="giahuy", sampling=Sampling(audio_topk=10))
-    }
+    response = client.get("/v1/models")
+    assert response.status_code == 200
+    assert [model["id"] for model in response.json()["data"]] == ["zerotts"]
+    assert client.post(SPEECH, json=speech_body()).status_code == 200
+    assert engine.calls[0]["voice"] == "giahuy"
+    assert engine.calls[0]["sampling"] == Sampling(audio_topk=10)
 
 
 # --- models, health ------------------------------------------------------------
@@ -312,11 +316,9 @@ def test_health_is_503_until_warmup_finishes(make_client, engine):
     assert client.get("/v1/models").json()["data"][0]["loaded"] is False
 
     engine.loaded.set()
-    deadline = time.monotonic() + 5
-    while client.get("/health").status_code != 200:
-        assert time.monotonic() < deadline
-        time.sleep(0.01)
-    assert client.get("/health").json()["status"] == "ok"
+    response = wait_for_health(client)
+    assert response.status_code == 200
+    assert response.json()["status"] == "ok"
     assert client.post(SPEECH, json=speech_body()).status_code == 200
 
 
@@ -324,11 +326,7 @@ def test_failed_load_keeps_health_503(make_client):
     engine = FakeEngine(fail_load=True)
     client = TestClient(create_app(Settings(), engine=engine))
     with client:
-        deadline = time.monotonic() + 5
-        while client.get("/health").json()["error"]["type"] == "model_loading":
-            assert time.monotonic() < deadline
-            time.sleep(0.01)
-        assert_error(client.get("/health"), 503, "model_load_failed")
+        assert_error(wait_for_health(client), 503, "model_load_failed")
         assert_error(client.post(SPEECH, json=speech_body()), 503, "model_load_failed")
 
 

@@ -279,7 +279,12 @@ def read_seed(body: dict) -> int | None:
         if seed is None:
             continue
         if isinstance(seed, str) and seed.isascii() and seed.isdigit():
-            seed = int(seed)
+            try:
+                seed = int(seed)
+            except ValueError:
+                raise ServerError(
+                    400, "invalid_request_error", "'seed' must be an integer in [0, 2^64)"
+                ) from None
         if isinstance(seed, bool) or not isinstance(seed, int) or not 0 <= seed < MAX_SEED:
             raise ServerError(
                 400, "invalid_request_error", "'seed' must be an integer in [0, 2^64)"

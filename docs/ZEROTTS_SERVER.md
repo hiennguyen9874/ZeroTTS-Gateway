@@ -56,4 +56,4 @@ Body lỗi theo dạng audio.cpp `{"error":{"message","type"}}`; `message` khôn
 
 ## Test
 
-`tests/test_server.py` chạy qua HTTP với engine giả (`create_app(settings, engine=...)`). `tests/test_server_smoke.py` (marker `real_model`) chạy model thật, tự bỏ qua khi không có weights trong `models/ZeroTTS`; bỏ chọn bằng `-m "not real_model"`.
+`tests/test_server.py` chạy qua HTTP với engine giả (`create_app(settings, engine=...)`). `tests/test_server_smoke.py` (marker `real_model`) chạy model thật, mặc định không được chọn kể cả khi có weights. Chạy riêng bằng `uv run python -m pytest -m real_model`; test vẫn tự bỏ qua khi không có weights trong `models/ZeroTTS`.

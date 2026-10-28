@@ -38,6 +38,7 @@ module-name = ["zerotts_gateway", "zerotts_server"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+addopts = '-m "not real_model"'
 markers = ["real_model: runs the real ZeroTTS weights from models/ (skipped when absent)"]
 
 [dependency-groups]
