@@ -48,7 +48,9 @@ The same seed produces different audio with fp32 versus int8. Two quantizations
 on this dev machine produced identical hot-graph SHA-256 hashes; this does not
 guarantee equality across machines or versions. For multiple nodes, prefer copying
 one complete int8 directory. Evidence and reproduction:
-`docs/reports/issue12-zerotts-int8.md`.
+`docs/reports/issue12-zerotts-int8.md`. Dev-machine speed (int8 about 1.4–1.5× faster RTF):
+`docs/reports/issue13-zerotts-int8-speed.md`, measured with `scripts/bench_zerotts.py`
+(engine level, one weights directory per process).
 
 ## Workers and voices
 
