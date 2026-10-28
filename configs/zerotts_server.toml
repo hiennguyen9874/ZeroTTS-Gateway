@@ -8,8 +8,13 @@ port = 8080
 model_dir = "../models/ZeroTTS"
 # Voice packs (<name>/voice.npz + meta.json); default <model_dir>/voices. Drop a pack in, restart.
 # voices_dir = "../models/ZeroTTS/voices"
-# onnxruntime intra-op threads.
+# Workers, each holding its own model instance (memory grows with workers) and running one
+# request at a time.
+workers = 1
+# onnxruntime intra-op threads per worker; workers × threads should not exceed the CPU cores.
 threads = 8
+# Seconds a request waits for a free worker before it gets 503 server_busy; 0 means no wait.
+busy_timeout = 5.0
 
 # Model ids served; callers cannot change sampling, only `seed`. `mode` is "offline" (default:
 # wav/pcm/json) or "streaming" (only stream_format sse/audio), as audio.cpp's model entries.

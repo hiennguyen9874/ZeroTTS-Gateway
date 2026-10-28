@@ -10,7 +10,7 @@ import time
 import unicodedata
 import wave
 from collections.abc import AsyncIterator, Callable, Iterator
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 
 import numpy as np
 from fastapi import FastAPI, Request
@@ -108,47 +108,105 @@ def sse_event(payload: dict | str) -> bytes:
     return f"data: {data}\n\n".encode()
 
 
-async def iterate_in_thread(make: Callable[[], Iterator]) -> AsyncIterator:
-    """Run a blocking iterator in its own thread, handing items to the event loop.
+class WorkerPool:
+    """Engines that each run one request at a time; a request waits up to busy_timeout."""
 
-    When the consumer stops (the caller disconnected), the thread stops after the item in
-    progress and closes the iterator, so the engine is freed instead of synthesizing on.
-    """
-    loop = asyncio.get_running_loop()
-    queue: asyncio.Queue = asyncio.Queue()
-    stop = threading.Event()
-    end = object()
+    def __init__(self, engines: list[Engine], busy_timeout: float):
+        self.engines, self.busy_timeout = engines, busy_timeout
+        self._free: asyncio.Queue | None = None
 
-    def put(item) -> None:
+    def open(self) -> None:
+        """Bind the free list to the running event loop; call once, from the loop."""
+        self._loop = asyncio.get_running_loop()
+        self._free = asyncio.Queue()
+        for engine in self.engines:
+            self._free.put_nowait(engine)
+
+    async def acquire(self) -> Engine:
+        # wait_for(..., 0) times out even when a worker is free.
+        with suppress(asyncio.QueueEmpty):
+            return self._free.get_nowait()
         try:
-            loop.call_soon_threadsafe(queue.put_nowait, item)
-        except RuntimeError:  # the event loop is gone (shutdown)
-            stop.set()
+            return await asyncio.wait_for(self._free.get(), self.busy_timeout)
+        except TimeoutError:
+            raise ServerError(503, "server_busy", "all workers are busy") from None
 
-    def run() -> None:
+    def release(self, engine: Engine) -> None:
+        """Thread-safe: called by the thread that ran the engine, once it has stopped."""
+        with suppress(RuntimeError):  # the event loop is gone (shutdown)
+            self._loop.call_soon_threadsafe(self._free.put_nowait, engine)
+
+
+class ThreadedIterator:
+    """Runs a blocking iterator in its own thread from creation, handing items to the loop.
+
+    close(), or the consumer stopping (the caller disconnected), makes the thread stop after
+    the item in progress and close the iterator. `on_done` then runs in the thread, so the
+    worker is returned only once the engine has really stopped.
+    """
+
+    _END = object()
+
+    def __init__(self, make: Callable[[], Iterator], on_done: Callable[[], None]):
+        self._loop = asyncio.get_running_loop()
+        self._queue: asyncio.Queue = asyncio.Queue()
+        self._stop = threading.Event()
+        try:
+            threading.Thread(target=self._run, args=(make, on_done), daemon=True).start()
+        except BaseException:
+            on_done()
+            raise
+
+    def _put(self, item) -> None:
+        try:
+            self._loop.call_soon_threadsafe(self._queue.put_nowait, item)
+        except RuntimeError:  # the event loop is gone (shutdown)
+            self._stop.set()
+
+    def _run(self, make: Callable[[], Iterator], on_done: Callable[[], None]) -> None:
         items = None
         try:
             items = iter(make())
             for item in items:
-                if stop.is_set():
+                if self._stop.is_set():
                     break
-                put(item)
-            put(end)
+                self._put(item)
+            self._put(self._END)
         except Exception as exc:
-            put(exc)
+            self._put(exc)
         finally:
-            close = getattr(items, "close", None)
-            if close:
-                close()
+            try:
+                close = getattr(items, "close", None)
+                if close:
+                    close()
+            finally:
+                on_done()
 
-    threading.Thread(target=run, daemon=True).start()
-    try:
-        while (item := await queue.get()) is not end:
-            if isinstance(item, Exception):
-                raise item
-            yield item
-    finally:
-        stop.set()
+    def close(self) -> None:
+        self._stop.set()
+
+    async def __aiter__(self) -> AsyncIterator:
+        try:
+            while (item := await self._queue.get()) is not self._END:
+                if isinstance(item, Exception):
+                    raise item
+                yield item
+        finally:
+            self.close()
+
+
+class EngineStreamingResponse(StreamingResponse):
+    """Stops the engine thread however the response ends, even if the body never started."""
+
+    def __init__(self, items: ThreadedIterator, content, **kwargs):
+        super().__init__(content, **kwargs)
+        self.items = items
+
+    async def __call__(self, scope, receive, send):
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            self.items.close()
 
 
 def split_segments(text: str) -> list[str]:
@@ -161,14 +219,24 @@ def split_segments(text: str) -> list[str]:
 
 
 def create_app(settings: Settings, engine: Engine | None = None) -> FastAPI:
-    engine = engine or ZeroTTSEngine(settings.model_dir, settings.voices_path, settings.threads)
+    if engine is None:
+        engines = [
+            ZeroTTSEngine(settings.model_dir, settings.voices_path, settings.threads)
+            for _ in range(settings.workers)
+        ]
+    else:
+        # An injected engine serves every worker slot, so it must be thread-safe.
+        engines = [engine] * settings.workers
+    engine = engines[0]  # voices are the same in every worker
+    pool = WorkerPool(engines, settings.busy_timeout)
     # "loading" until engine.load() returns, then "ready" or "failed".
     state = {"status": "loading"}
 
     def load() -> None:
         start = time.perf_counter()
         try:
-            engine.load()
+            for worker in dict.fromkeys(engines):
+                worker.load()
             voices = engine.voices()
             for model_id, model in settings.models.items():
                 if model.default_voice not in voices:
@@ -182,6 +250,7 @@ def create_app(settings: Settings, engine: Engine | None = None) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(_app):
+        pool.open()
         # Load in the background so /health can answer 503 while the model warms up.
         task = asyncio.create_task(asyncio.to_thread(load))
         yield
@@ -314,23 +383,26 @@ def create_app(settings: Settings, engine: Engine | None = None) -> FastAPI:
         )
 
         start = time.perf_counter()
-        if streaming:
-            return stream_speech(
-                lambda: engine.synthesize(segments, voice, seed, model.sampling, stream=True),
-                stream_format == "sse",
-                fields,
-                start,
-            )
         try:
-            pcm = await asyncio.to_thread(
-                lambda: b"".join(
-                    pcm16(chunk)
-                    for chunk in engine.synthesize(segments, voice, seed, model.sampling)
-                )
-            )
+            worker = await pool.acquire()
+        finally:
+            fields["wait_ms"] = elapsed_ms(start)
+        start = time.perf_counter()
+        # From here the thread running the engine returns the worker when it stops.
+        items = ThreadedIterator(
+            lambda: worker.synthesize(segments, voice, seed, model.sampling, stream=streaming),
+            lambda: pool.release(worker),
+        )
+        if streaming:
+            return stream_speech(items, stream_format == "sse", fields, start)
+
+        try:
+            pcm = b"".join([pcm16(chunk) async for chunk in items])
         except Exception as exc:
             fields["engine_error"] = type(exc).__name__
             raise ServerError(500, "server_error", "synthesis failed") from None
+        finally:
+            items.close()
         wall_ms = elapsed_ms(start)
         audio_ms = round(len(pcm) / 2 / SAMPLE_RATE * 1000, 1)
         rtf = round(wall_ms / audio_ms, 3) if audio_ms else 0.0
@@ -356,7 +428,7 @@ def create_app(settings: Settings, engine: Engine | None = None) -> FastAPI:
 
 
 def stream_speech(
-    synthesize: Callable[[], Iterator[np.ndarray]], sse: bool, fields: dict, start: float
+    items: ThreadedIterator, sse: bool, fields: dict, start: float
 ) -> StreamingResponse:
     """audio.cpp's streamed speech: SSE events, or raw PCM over chunked transfer."""
 
@@ -364,7 +436,7 @@ def stream_speech(
         samples = 0
         ttfa_ms = None
         try:
-            async for chunk in iterate_in_thread(synthesize):
+            async for chunk in items:
                 pcm = pcm16(chunk)
                 if not pcm:
                     continue
@@ -401,10 +473,10 @@ def stream_speech(
             yield sse_event("[DONE]")
 
     if sse:
-        return StreamingResponse(
-            body(), media_type="text/event-stream", headers={"X-Accel-Buffering": "no"}
+        return EngineStreamingResponse(
+            items, body(), media_type="text/event-stream", headers={"X-Accel-Buffering": "no"}
         )
-    return StreamingResponse(body(), media_type="audio/pcm")
+    return EngineStreamingResponse(items, body(), media_type="audio/pcm")
 
 
 async def read_body(request: Request) -> dict:

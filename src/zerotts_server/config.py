@@ -50,8 +50,12 @@ class Settings:
     model_dir: str = "models/ZeroTTS"
     # Voice packs (<name>/voice.npz + meta.json); defaults to <model_dir>/voices.
     voices_dir: str | None = None
-    # onnxruntime intra-op threads.
+    # Workers, each holding its own model instance and running one request at a time.
+    workers: int = 1
+    # onnxruntime intra-op threads per worker.
     threads: int = 8
+    # Seconds a request waits for a free worker before it gets 503 server_busy.
+    busy_timeout: float = 5.0
     host: str = "127.0.0.1"
     port: int = 8080
     models: Mapping[str, ModelConfig] = field(
@@ -60,6 +64,16 @@ class Settings:
             "zerotts-stream": ModelConfig(mode="streaming"),
         }
     )
+
+    def __post_init__(self):
+        for name in ("workers", "threads"):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+                raise ValueError(f"{name} must be an integer >= 1")
+        if isinstance(self.busy_timeout, bool) or not (
+            isinstance(self.busy_timeout, int | float) and self.busy_timeout >= 0
+        ):
+            raise ValueError("busy_timeout must be a number of seconds >= 0")
 
     @property
     def voices_path(self) -> Path:

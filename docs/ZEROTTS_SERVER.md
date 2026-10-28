@@ -1,6 +1,6 @@
 # Chạy và cấu hình `zerotts_server`
 
-`zerotts_server` là upstream mới (ADR 0005): bọc `zerotts==0.1.5` trên onnxruntime CPU và nói phần API audio.cpp mà gateway dùng. Spec: issue #1. Có model offline `zerotts` và model streaming `zerotts-stream`; một engine xử lý lần lượt từng request (worker và `busy_timeout`: #6). Docker và script tải weights: #7.
+`zerotts_server` là upstream mới (ADR 0005): bọc `zerotts==0.1.5` trên onnxruntime CPU và nói phần API audio.cpp mà gateway dùng. Spec: issue #1. Có model offline `zerotts` và model streaming `zerotts-stream`; N worker chạy song song, request chờ worker rảnh tối đa `busy_timeout`. Docker và script tải weights: #7.
 
 ## Weights
 
@@ -33,7 +33,9 @@ Biến môi trường:
 
 `configs/zerotts_server.toml` (chú thích ngay trong file). Đường dẫn tương đối tính từ thư mục chứa file config.
 
-- `host`, `port` (mặc định 8080), `threads` (số luồng ONNX, mặc định 8).
+- `host`, `port` (mặc định 8080).
+- `workers` (mặc định 1): số worker; mỗi worker giữ một instance model riêng (RAM tăng theo số worker) và xử lý một request mỗi lúc. `threads` (mặc định 8): số luồng ONNX của mỗi worker; `workers × threads` không nên vượt số core.
+- `busy_timeout` (giây, mặc định 5): khi mọi worker bận, request chờ tối đa chừng này rồi nhận `503 server_busy` (cả model offline lẫn streaming, trước khi stream bắt đầu); `0` là không chờ. Server không retry; caller tự quyết định thử lại, gateway chuyển nguyên lỗi. Worker được trả lại khi engine dừng hẳn: request xong, engine lỗi, hoặc caller ngắt giữa stream (engine dừng sau mẩu audio đang sinh).
 - `model_dir`: thư mục weights; `voices_dir`: thư mục voice pack, mặc định `<model_dir>/voices`. Thêm voice: thả một thư mục `<tên>/voice.npz` (kèm `meta.json` nếu muốn có mô tả) vào đó rồi khởi động lại.
 - `[models.<id>]`: model id phục vụ. `mode`: `offline` (mặc định) hoặc `streaming`, như entry `mode` của audio.cpp; mặc định có `zerotts` (offline) và `zerotts-stream` (streaming). `default_voice` dùng khi request không có `voice` (phải có trong thư mục voice, nếu không model báo nạp lỗi). `[models.<id>.sampling]`: `cfg_scale`, `text_temperature`, `text_topk`, `audio_temperature`, `audio_topk`, `audio_topp`, `audio_repetition_penalty`; mặc định theo `zerotts`.
 
@@ -63,7 +65,7 @@ Request `/v1/audio/speech`:
 - Engine lỗi giữa stream: SSE kết thúc bằng `data: {"type":"error","error":{"message","type":"server_error"}}`, không có `speech.audio.done` hay `[DONE]`. PCM thô không có chỗ báo lỗi nên server cắt kết nối (không gửi chunk kết thúc), để caller không nhầm audio cụt là audio đủ. Caller ngắt kết nối thì engine dừng sau mẩu audio đang sinh.
 - Gateway chuyển stream nguyên vẹn, không cần đổi code.
 
-Body lỗi theo dạng audio.cpp `{"error":{"message","type"}}`; `message` không chứa text. Log là JSON, mỗi request một dòng: model, voice, seed, số ký tự, số đoạn (`segments`), `synth_ms`, `audio_ms`, `rtf`, `ttfa_ms` (khi stream), mã lỗi; không có text hay audio.
+Body lỗi theo dạng audio.cpp `{"error":{"message","type"}}`; `message` không chứa text. Log là JSON, mỗi request một dòng: model, voice, seed, số ký tự, số đoạn (`segments`), thời gian chờ worker (`wait_ms`), `synth_ms`, `audio_ms`, `rtf`, `ttfa_ms` (khi stream), mã lỗi; không có text hay audio.
 
 ## Test
 

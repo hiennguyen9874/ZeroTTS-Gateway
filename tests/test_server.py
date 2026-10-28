@@ -1,6 +1,8 @@
 """zerotts_server through its HTTP API, with a fake engine injected into create_app."""
 
+import asyncio
 import base64
+import contextlib
 import io
 import json
 import logging
@@ -8,6 +10,7 @@ import threading
 import time
 import unicodedata
 import wave
+from concurrent.futures import ThreadPoolExecutor
 
 import httpx
 import numpy as np
@@ -83,7 +86,7 @@ class FakeEngine:
                     yield chunk
                     sent += 1
                     if sent == 1 and self.gate is not None:
-                        assert self.gate.wait(5), "test never opened the gate"
+                        assert self.gate.wait(10), "test never opened the gate"
             self.finished.set()
         finally:
             self.closed.set()
@@ -697,6 +700,8 @@ def test_caller_disconnect_stops_the_engine(live_server, engine):
 
     assert engine.closed.wait(2)
     assert not engine.finished.is_set()
+    engine.chunks, engine.delay = CHUNKS, 0.0
+    assert httpx.post(base + SPEECH, json=stream_body(), timeout=5).status_code == 200
 
 
 @pytest.mark.parametrize("extra", [{}, {"stream_format": "audio"}], ids=["sse", "audio"])
@@ -739,3 +744,163 @@ def test_gateway_forwards_mode_mismatch_400(live_server, live_gateway, upstream)
     assert_error(via_gateway, 400, "invalid_request_error")
     assert via_gateway.content == direct.content
     assert upstream.last_json() == body
+
+
+# --- workers and busy_timeout ------------------------------------------------
+
+
+def post_in_thread(base, body):
+    """POST in a background thread; join() the returned thread, then read result[0]."""
+    result = []
+    thread = threading.Thread(
+        target=lambda: result.append(httpx.post(base + SPEECH, json=body, timeout=10)), daemon=True
+    )
+    thread.start()
+    return thread, result
+
+
+def wait_for_calls(engine, n):
+    deadline = time.monotonic() + 5
+    while len(engine.calls) < n:
+        assert time.monotonic() < deadline, f"engine never got {n} calls"
+        time.sleep(0.01)
+
+
+def test_n_workers_run_n_requests_in_parallel_and_the_next_waits(live_server, engine):
+    engine.gate = threading.Event()
+    base = live_server(workers=2, busy_timeout=5)
+
+    requests = [post_in_thread(base, speech_body()) for _ in range(3)]
+    wait_for_calls(engine, 2)
+    time.sleep(0.3)
+    assert len(engine.calls) == 2  # the third request waits for a free worker
+    engine.gate.set()
+
+    for thread, result in requests:
+        thread.join(10)
+        assert result[0].status_code == 200
+    assert len(engine.calls) == 3
+
+
+@pytest.mark.parametrize("body", [speech_body(), stream_body()], ids=["offline", "stream"])
+def test_busy_past_busy_timeout_is_503_server_busy(live_server, engine, body):
+    engine.gate = threading.Event()
+    base = live_server(workers=1, busy_timeout=0.2)
+    thread, result = post_in_thread(base, speech_body())
+    wait_for_calls(engine, 1)
+
+    start = time.monotonic()
+    response = httpx.post(base + SPEECH, json=body, timeout=5)
+
+    assert time.monotonic() - start >= 0.2
+    assert_error(response, 503, "server_busy")
+    assert len(engine.calls) == 1
+    engine.gate.set()
+    thread.join(10)
+    assert result[0].status_code == 200
+
+
+def test_busy_503_is_logged_without_text(live_server, engine, caplog):
+    caplog.set_level(logging.INFO, logger="zerotts_server")
+    engine.gate = threading.Event()
+    base = live_server(workers=1, busy_timeout=0)
+    thread, _ = post_in_thread(base, speech_body())
+    wait_for_calls(engine, 1)
+
+    assert_error(httpx.post(base + SPEECH, json=speech_body(), timeout=5), 503, "server_busy")
+    engine.gate.set()
+    thread.join(10)
+
+    busy = [
+        r.fields
+        for r in caplog.records
+        if r.getMessage() == "request" and r.fields["status"] == 503
+    ]
+    assert [fields["error"] for fields in busy] == ["server_busy"]
+    assert busy[0]["wait_ms"] >= 0
+    assert "Xin" not in json.dumps(busy, ensure_ascii=False)
+
+
+@pytest.mark.parametrize(
+    ("body", "fail_after"),
+    [(speech_body(), 0), (stream_body(), 1), (stream_body(stream_format="audio"), 1)],
+    ids=["offline", "sse", "audio"],
+)
+def test_worker_is_returned_after_an_engine_failure(live_server, engine, body, fail_after):
+    engine.error, engine.fail_after = RuntimeError("boom"), fail_after
+    base = live_server(workers=1, busy_timeout=0.5)
+    with contextlib.suppress(httpx.RemoteProtocolError):  # raw PCM aborts the connection
+        httpx.post(base + SPEECH, json=body, timeout=5)
+    assert engine.closed.wait(2)
+
+    engine.error = None
+    for _ in range(3):
+        assert httpx.post(base + SPEECH, json=body, timeout=5).status_code == 200
+
+
+@pytest.mark.parametrize("workers", [2, 33])
+def test_configured_workers_are_not_limited_by_the_default_executor(
+    tmp_path, make_client, engine, workers
+):
+    config = tmp_path / "server.toml"
+    config.write_text(f"workers = {workers}\nthreads = 4\nbusy_timeout = 0.2\n")
+    client = make_client(load_settings(config, env={}))
+    engine.gate = threading.Event()
+    with ThreadPoolExecutor(max_workers=workers) as callers:
+        requests = [callers.submit(client.post, SPEECH, json=speech_body()) for _ in range(workers)]
+        try:
+            wait_for_calls(engine, workers)
+            start = time.monotonic()
+            assert_error(client.post(SPEECH, json=speech_body()), 503, "server_busy")
+            assert time.monotonic() - start >= 0.2
+        finally:
+            engine.gate.set()
+        assert all(request.result().status_code == 200 for request in requests)
+
+
+def test_cancelled_offline_request_does_not_lose_worker_when_executor_is_busy(engine):
+    async def scenario():
+        app = create_app(Settings(busy_timeout=0.2), engine=engine)
+        async with (
+            app.router.lifespan_context(app),
+            httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url="http://server.test"
+            ) as client,
+        ):
+            while (await client.get("/health")).status_code != 200:
+                await asyncio.sleep(0.01)
+            executor = ThreadPoolExecutor(max_workers=1)
+            asyncio.get_running_loop().set_default_executor(executor)
+            executor_gate = threading.Event()
+            occupied = executor.submit(executor_gate.wait)
+            engine.gate = threading.Event()
+            request = asyncio.create_task(client.post(SPEECH, json=speech_body()))
+            try:
+                await asyncio.sleep(0.1)
+                request.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await request
+            finally:
+                engine.gate.set()
+                executor_gate.set()
+                occupied.result(timeout=2)
+            response = await client.post(SPEECH, json=speech_body())
+            assert response.status_code == 200
+
+    asyncio.run(scenario())
+
+
+def test_default_config_has_one_worker_and_five_second_busy_timeout(make_client, engine):
+    client = make_client(load_settings(None, env={}))
+    engine.gate = threading.Event()
+    with ThreadPoolExecutor(max_workers=1) as callers:
+        request = callers.submit(client.post, SPEECH, json=speech_body())
+        try:
+            wait_for_calls(engine, 1)
+            start = time.monotonic()
+            assert_error(client.post(SPEECH, json=speech_body()), 503, "server_busy")
+            assert 5 <= time.monotonic() - start < 7
+            assert len(engine.calls) == 1
+        finally:
+            engine.gate.set()
+        assert request.result().status_code == 200
