@@ -1,6 +1,6 @@
-# omnivoice-gateway
+# zerotts-gateway
 
-Các khái niệm trong luồng chuẩn bị văn bản tiếng Việt trước khi tổng hợp giọng bằng OmniVoice.
+Các khái niệm trong luồng chuẩn bị văn bản tiếng Việt trước khi tổng hợp giọng bằng ZeroTTS.
 
 ## Language
 
@@ -9,7 +9,7 @@ Dịch vụ đứng trước upstream, nhận request tổng hợp giọng với
 _Avoid_: Facade, proxy
 
 **Upstream**:
-Máy chủ tổng hợp giọng thật sự đứng sau gateway (audio.cpp chạy OmniVoice).
+Máy chủ tổng hợp giọng thật sự đứng sau gateway (máy chủ ZeroTTS nói cùng API với audio.cpp).
 _Avoid_: Engine, backend
 
 **Caller**:
@@ -33,6 +33,10 @@ Chuỗi bước có thứ tự biến input text thành engine text: làm sạch
 Luật theo mẫu do gateway sở hữu, viết lại một dạng viết mà normalizer đọc sai thành dạng nói tiếng Việt; khác từ điển phát âm ở chỗ khớp theo mẫu chứ không theo từ cố định.
 _Avoid_: Normalizer patch, pre-normalization rule
 
+**Voice**:
+Giọng có sẵn ở upstream mà caller chọn bằng tên; nếu caller không chọn thì dùng giọng mặc định operator cấu hình cho model. Gateway không tạo giọng mới từ audio tham chiếu.
+_Avoid_: Speaker, voice ref
+
 **Effective language**:
 Ngôn ngữ dùng để quyết định cách chuẩn bị văn bản cho một request: ngôn ngữ caller khai báo, nếu thiếu thì lấy mặc định của model.
 
@@ -40,4 +44,4 @@ Ngôn ngữ dùng để quyết định cách chuẩn bị văn bản cho một 
 Mã cố định báo rằng gateway đã bỏ hoặc gỡ một phần input text (ví dụ URL, code block); không chứa nội dung văn bản.
 
 **Non-verbal tag**:
-Thẻ trong ngoặc vuông mà model hiểu như một chỉ dẫn, ví dụ `[laughter]` hoặc phiên âm `[B EY1 S]`; phải đi qua text pipeline nguyên vẹn.
+Thẻ trong ngoặc vuông dùng làm chỉ dẫn cho model thay vì để đọc, ví dụ `[laughter]` hoặc phiên âm `[B EY1 S]`. Model không hiểu thẻ sẽ đọc thẻ thành chữ, nên với model đó gateway gỡ thẻ khỏi input text và báo text warning.

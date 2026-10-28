@@ -1,3 +1,7 @@
+---
+status: superseded by ADR-0005
+---
+
 # Operator có thể cho gateway đặt `speed` chậm hơn cho engine text ngắn
 
 Với model có `short_text_speed` trong config của gateway, nếu caller không gửi `speed` lẫn `options.duration_sec` (hay `options.duration`) và engine text có không quá `short_text_max_syllables` âm tiết (mặc định 12; đếm từ có chữ hoặc số, bỏ non-verbal tag), gateway thêm `"speed": short_text_speed` vào request gửi lên upstream. Không cấu hình dạng scalar lẫn band thì gateway không đụng vào tham số sinh. Đây là dạng scalar ban đầu (#18), vẫn tương thích. Sau #19, `configs/gateway.toml` dùng dạng band dưới đây cho `g-omnivoice` và `g-omnivoice-stream`.
