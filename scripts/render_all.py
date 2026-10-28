@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Run render_samples.py for every (case set, model, voice) and build one summary.
 
-Needs zerotts_server and the gateway running (see docs/LISTENING.md). Defaults: both case sets,
-every TTS model in /v1/models and its available voices.
+Needs zerotts_server and the gateway running (see docs/agents/listening.md). Defaults: both case
+sets, every TTS model in /v1/models and its available voices.
 
   uv run python scripts/render_all.py                                  # everything
   uv run python scripts/render_all.py --set listening --model zerotts --voice maichi

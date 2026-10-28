@@ -4,7 +4,7 @@
 # --local-dir writes real files, not symlinks into the HF cache: onnxruntime >= 1.25 rejects
 # external data behind symlinks (ADR 0005). Re-running skips files already at this revision
 # (metadata in <dir>/.cache/huggingface). Needs the `hf` CLI: `uv run scripts/download_zerotts.sh`.
-# Bump REVISION only on purpose, then rerun the real-model smoke test (docs/ZEROTTS_SERVER.md).
+# Bump REVISION only on purpose, then rerun the real-model smoke test (docs/agents/zerotts-server.md).
 set -euo pipefail
 
 REPO=zeroweight-ai/ZeroTTS

@@ -1,5 +1,5 @@
 # zerotts_server (the ZeroTTS upstream, ADR 0005) only, CPU only. Variables come from .env
-# (see .env.example). Weights first: `uv run scripts/download_zerotts.sh` (docs/DEPLOY.md).
+# (see .env.example). Weights first: `uv run scripts/download_zerotts.sh` (docs/agents/deploy.md).
 #   alone, e.g. on a separate CPU node:  docker compose -f compose.zerotts.yaml up -d --build
 #   with the gateway on the same host:   COMPOSE_FILE=compose.yaml:compose.zerotts.yaml:compose.zerotts-stack.yaml
 services:

@@ -131,7 +131,7 @@ chính sách. Không coi ASR là bằng chứng hoàn tất tiêu chí nghe.
 
 ### Tái lập
 
-Khởi động upstream, gateway với config repo và ASR theo [LISTENING.md](../LISTENING.md#chấm-bằng-asr-tuỳ-chọn), rồi:
+Khởi động upstream, gateway với config repo và ASR theo [agents/listening.md](../agents/listening.md#asr-scoring), rồi:
 
 ```bash
 for voice in Doan_Trang Ngoc_Linh; do

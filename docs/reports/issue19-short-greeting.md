@@ -66,7 +66,7 @@ So sánh với #18: yêu cầu từng ca ≥ 0.95 và không thấp hơn baselin
 
 ### Tái lập
 
-Khởi động upstream, gateway với `--config configs/gateway.toml` và ASR theo [LISTENING.md](../LISTENING.md#chấm-bằng-asr-tuỳ-chọn). Nếu môi trường đặt `UV_NO_SYNC=true`, cài nhóm ASR bằng `UV_NO_SYNC=false uv sync --group asr --group dev` trước. Sau đó chạy ở thư mục gốc repo (chọn thư mục output mới cho mỗi lượt):
+Khởi động upstream, gateway với `--config configs/gateway.toml` và ASR theo [agents/listening.md](../agents/listening.md#asr-scoring). Nếu môi trường đặt `UV_NO_SYNC=true`, cài nhóm ASR bằng `UV_NO_SYNC=false uv sync --group asr --group dev` trước. Sau đó chạy ở thư mục gốc repo (chọn thư mục output mới cho mỗi lượt):
 
 ```bash
 export OMNIVOICE_ASR_URL=http://127.0.0.1:8090

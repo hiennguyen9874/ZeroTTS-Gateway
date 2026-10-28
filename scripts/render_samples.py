@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Render cases for a listening run: gateway (A) vs upstream direct (B), with metrics.
 
-Needs a running zerotts_server and a gateway in front of it (docs/LISTENING.md):
+Needs a running zerotts_server and a gateway in front of it (docs/agents/listening.md):
 
   uv run python scripts/render_samples.py --out outputs/listen-001
   uv run python scripts/render_samples.py --model zerotts-stream --group numbers-money

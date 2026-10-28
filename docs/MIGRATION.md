@@ -45,7 +45,7 @@ Upstream từ chối option không hỗ trợ bằng `400 unsupported_option`; g
 
    `uv sync` mặc định cài cả dependency server qua dev group. Nếu cài production không có dev group, dùng `uv sync --no-dev --extra server` cho upstream; gateway chỉ cần `uv sync --no-dev`.
 
-   Weights nằm ở `models/ZeroTTS`, được tải bằng `hf download --local-dir`, không dùng symlink HF cache. Không dùng weights GGUF/audio tokenizer của OmniVoice hoặc ZeroTTS-GGUF. Chi tiết: [ZEROTTS_SERVER.md](ZEROTTS_SERVER.md#weights).
+   Weights nằm ở `models/ZeroTTS`, được tải bằng `hf download --local-dir`, không dùng symlink HF cache. Không dùng weights GGUF/audio tokenizer của OmniVoice hoặc ZeroTTS-GGUF. Chi tiết: [agents/zerotts-server.md](agents/zerotts-server.md#weights).
 
 4. Dùng cấu hình mẫu mới thay vì chép nguyên cấu hình cũ:
    - `configs/zerotts_server.toml`: kiểm tra `model_dir`, `default_voice` cho từng model, sampling, `workers`, `threads`, `busy_timeout`. Mặc định là **1 worker × 8 luồng ONNX**, chờ worker tối đa **5 giây**; mỗi worker giữ một instance model riêng.
@@ -109,7 +109,7 @@ Overlay đặt upstream URL thành `http://zerotts:8080`, ghi đè `ZEROTTS_GATE
 - Upstream không có auth: dùng firewall chỉ cho gateway truy cập. Caller chỉ gọi gateway.
 - `127.0.0.1` trong container là chính container. Upstream chạy trên Docker host: dùng `host.docker.internal` và cho upstream lắng nghe ở địa chỉ container truy cập được.
 
-Chi tiết biến, volume, restart và healthcheck: [DEPLOY.md](DEPLOY.md).
+Chi tiết biến, volume, restart và healthcheck: [agents/deploy.md](agents/deploy.md).
 
 ## 4. Cập nhật và kiểm tra caller
 

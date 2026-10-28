@@ -17,7 +17,7 @@
 
 - Upstream: `zerotts_server` thật (`zerotts==0.1.5`, onnxruntime 1.31.1, CPU Xeon Silver 4216 64 luồng dùng chung), 6 worker × 8 luồng, model `zerotts` (offline), sampling mặc định của `configs/zerotts_server.toml`. Commit `09c4726` cộng thay đổi của slice này.
 - Ca: golden (190 ca không lỗi, gồm cả các ca `zerotts-*`) và bộ nghe `listening` (43 ca, bỏ 4 ca clone). Giọng `maichi`, `baotrang`, `quangminh`, `giahuy` (2 nữ, 2 nam) với seed 42; `maichi`, `quangminh` với seed 7. Tổng 4.194 lần render, không lần nào lỗi.
-- Chấm: gipformer (`g-group-ai-lab/gipformer1.5-68M-rnnt` int8, `scripts/asr_server.py`), rồi `scripts/ab_report.py`. Tham chiếu là input text qua toàn bộ pipeline, cả bản có lẫn không có lexicon; mỗi hàng chấm theo tham chiếu gần hơn. Biến thể vùng miền (`ngàn`/`nghìn`, `tư`/`bốn`, `mốt`/`một`, `lẻ`/`linh`) được gộp. Bỏ 90 hàng: ca `language` không phải tiếng Việt và ca lỗi. WER/CER tính trên cả tập. Chi tiết: [LISTENING.md, mục A/B](../LISTENING.md#ab-text-pipeline-cho-zerotts).
+- Chấm: gipformer (`g-group-ai-lab/gipformer1.5-68M-rnnt` int8, `scripts/asr_server.py`), rồi `scripts/ab_report.py`. Tham chiếu là input text qua toàn bộ pipeline, cả bản có lẫn không có lexicon; mỗi hàng chấm theo tham chiếu gần hơn. Biến thể vùng miền (`ngàn`/`nghìn`, `tư`/`bốn`, `mốt`/`một`, `lẻ`/`linh`) được gộp. Bỏ 90 hàng: ca `language` không phải tiếng Việt và ca lỗi. WER/CER tính trên cả tập. Chi tiết: [agents/listening.md, mục A/B](../agents/listening.md#text-pipeline-ab).
 - RTF trong lượt này (~3) chỉ phản ánh máy quá tải khi chạy 6 luồng song song, không dùng để đánh giá tốc độ (#10).
 
 ## Kết quả theo nhóm ca
@@ -106,6 +106,6 @@ uv run zerotts-server --config <zerotts_server.toml với workers = 6>
 uv run zerotts-gateway --config <gateway.toml có lexicon, cổng 8000; zerotts: normalize = false để đo (b)>
 uv run zerotts-gateway --config <gateway.toml không lexicon_path, cổng 8001>
 uv run --group asr python scripts/asr_server.py --port 8090 --num-threads 8
-# rồi các lệnh render_all.py / ab_report.py ở docs/LISTENING.md, mục A/B,
+# rồi các lệnh render_all.py / ab_report.py ở docs/agents/listening.md, mục A/B,
 # với --voice maichi --voice baotrang --voice quangminh --voice giahuy, --seed 42 và 7
 ```
