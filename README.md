@@ -35,7 +35,8 @@ Seed chỉ tái lập trên cùng bộ weights/runtime: cùng seed cho audio kh�
 giữa fp32 và int8. Hai lần quantize trên máy dev có SHA-256 giống nhau, không
 đảm bảo giữa các máy/phiên bản; nhiều node nên copy chung một thư mục int8.
 Chi tiết: [triển khai](docs/agents/deploy.md#opt-in-int8),
-[báo cáo kiểm chứng](docs/reports/issue12-zerotts-int8.md).
+[báo cáo kiểm chứng](docs/reports/issue12-zerotts-int8.md),
+[A/B chất lượng fp32 so với int8](docs/reports/issue14-zerotts-int8-quality-ab.md).
 
 ## Tài liệu
 

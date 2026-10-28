@@ -50,7 +50,8 @@ guarantee equality across machines or versions. For multiple nodes, prefer copyi
 one complete int8 directory. Evidence and reproduction:
 `docs/reports/issue12-zerotts-int8.md`. Dev-machine speed (int8 about 1.4–1.5× faster RTF):
 `docs/reports/issue13-zerotts-int8-speed.md`, measured with `scripts/bench_zerotts.py`
-(engine level, one weights directory per process).
+(engine level, one weights directory per process). Quality A/B (#14, ASR WER 0.074 for
+both; listening verdict pending): `docs/reports/issue14-zerotts-int8-quality-ab.md`.
 
 ## Workers and voices
 
