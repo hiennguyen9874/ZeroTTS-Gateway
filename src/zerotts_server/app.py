@@ -277,14 +277,17 @@ def create_app(settings: Settings, engine: Engine | None = None) -> FastAPI:
                 400, "invalid_request_error", "this model only streams; set stream_format"
             )
         if streaming:
-            stream_format = body.get("stream_format") or "sse"
+            stream_format = body.get("stream_format")
+            if stream_format is None:
+                stream_format = "sse"
             if stream_format not in ("sse", "audio"):
                 raise ServerError(
                     400,
                     "invalid_request_error",
                     "streaming speech stream_format must be sse or audio",
                 )
-            if (body.get("response_format") or "pcm") != "pcm":
+            response_format = body.get("response_format")
+            if response_format is not None and response_format != "pcm":
                 raise ServerError(
                     400,
                     "invalid_request_error",

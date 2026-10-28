@@ -14,8 +14,6 @@ import numpy as np
 import pytest
 from fastapi.testclient import TestClient
 
-from zerotts_gateway import create_app as create_gateway
-from zerotts_gateway.config import Settings as GatewaySettings
 from zerotts_server import create_app, load_settings
 from zerotts_server.config import ModelConfig, Sampling, Settings
 from zerotts_server.engine import VoiceInfo
@@ -530,8 +528,13 @@ def joined_deltas(events) -> bytes:
 
 @pytest.mark.parametrize(
     "extra",
-    [{}, {"response_format": "pcm"}, {"stream_format": None, "stream": True}],
-    ids=["sse", "sse-pcm", "stream-true"],
+    [
+        {},
+        {"response_format": "pcm"},
+        {"response_format": None},
+        {"stream_format": None, "stream": True},
+    ],
+    ids=["sse", "sse-pcm", "sse-null-response-format", "stream-true"],
 )
 def test_sse_stream_has_audiocpp_events_and_engine_audio(client, engine, extra):
     response = client.post(SPEECH, json=stream_body(**extra))
@@ -583,6 +586,15 @@ def test_long_text_streams_every_segment_with_one_done(client, engine):
 )
 def test_stream_and_model_mode_mismatch_is_400(client, engine, body):
     assert_error(client.post(SPEECH, json=body), 400, "invalid_request_error")
+    assert engine.calls == []
+
+
+@pytest.mark.parametrize("field", ["stream_format", "response_format"])
+@pytest.mark.parametrize("value", ["", False, 0, [], {}])
+def test_invalid_streaming_formats_are_400(client, engine, field, value):
+    response = client.post(SPEECH, json=stream_body(**{field: value}))
+
+    assert_error(response, 400, "invalid_request_error")
     assert engine.calls == []
 
 
@@ -688,13 +700,16 @@ def test_caller_disconnect_stops_the_engine(live_server, engine):
 
 
 @pytest.mark.parametrize("extra", [{}, {"stream_format": "audio"}], ids=["sse", "audio"])
-def test_gateway_passes_the_stream_through_unchanged(live_server, serve, engine, extra):
+def test_gateway_passes_the_stream_through_unchanged(
+    live_server, live_gateway, upstream, engine, extra
+):
     base = live_server()
-    gateway = serve(create_gateway(GatewaySettings(upstream_url=base)))
     body = stream_body(input="Xin chào.", **extra)
 
     direct = httpx.post(base + SPEECH, json=body, timeout=5)
-    via_gateway = httpx.post(gateway + SPEECH, json=body, timeout=5)
+    # Replay the server response through the gateway's fake-upstream transport seam.
+    upstream.stream(direct.content, content_type=direct.headers["content-type"])
+    via_gateway = httpx.post(live_gateway() + SPEECH, json=body, timeout=5)
 
     assert via_gateway.status_code == direct.status_code == 200
     assert via_gateway.headers["content-type"] == direct.headers["content-type"]
@@ -703,14 +718,24 @@ def test_gateway_passes_the_stream_through_unchanged(live_server, serve, engine,
     else:
         assert joined_deltas(sse_events(via_gateway.content)) == pcm16(CHUNKS)
         assert sse_events(via_gateway.content)[-1] == "[DONE]"
-    assert [call["stream"] for call in engine.calls] == [True, True]
+    assert via_gateway.content == direct.content
+    assert [call["stream"] for call in engine.calls] == [True]
+    assert upstream.last_json() == body
 
 
-def test_gateway_forwards_mode_mismatch_400(live_server, serve):
-    gateway = serve(create_gateway(GatewaySettings(upstream_url=live_server())))
-
-    assert_error(
-        httpx.post(gateway + SPEECH, json=speech_body(stream_format="sse"), timeout=5),
-        400,
-        "invalid_request_error",
+def test_gateway_forwards_mode_mismatch_400(live_server, live_gateway, upstream):
+    body = speech_body(stream_format="sse")
+    direct = httpx.post(live_server() + SPEECH, json=body, timeout=5)
+    upstream.on(
+        "POST",
+        SPEECH,
+        lambda r: httpx.Response(
+            direct.status_code, content=direct.content, headers=direct.headers
+        ),
     )
+
+    via_gateway = httpx.post(live_gateway() + SPEECH, json=body, timeout=5)
+
+    assert_error(via_gateway, 400, "invalid_request_error")
+    assert via_gateway.content == direct.content
+    assert upstream.last_json() == body
