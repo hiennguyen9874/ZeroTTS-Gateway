@@ -24,8 +24,7 @@ ENV PATH="/app/.venv/bin:$PATH" \
     ZEROTTS_SERVER_CONFIG=/srv/configs/zerotts_server.toml \
     ZEROTTS_SERVER_HOST=0.0.0.0
 EXPOSE 8080
-# /health is 200 only after the model is loaded and warmed up. Port 8080 as in
-# configs/zerotts_server.toml; start period covers loading on a slow node.
+# /health is 200 only after the model is loaded and warmed up; start period covers slow nodes.
 HEALTHCHECK --interval=10s --timeout=5s --start-period=120s --retries=3 \
-    CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=3)"]
+    CMD ["python", "-c", "import urllib.request; from zerotts_server.config import load_settings; urllib.request.urlopen(f'http://127.0.0.1:{load_settings().port}/health', timeout=3)"]
 CMD ["zerotts-server"]

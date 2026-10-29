@@ -2,6 +2,7 @@
 #   ZEROTTS_GATEWAY_UPSTREAM_URL  upstream base URL
 #   ZEROTTS_GATEWAY_API_KEY       enables Bearer auth when set
 #   ZEROTTS_GATEWAY_HOST          listen address (the Docker image sets 0.0.0.0)
+#   ZEROTTS_GATEWAY_PORT          listen port
 upstream_url = "http://127.0.0.1:8080"
 host = "127.0.0.1"
 port = 8000

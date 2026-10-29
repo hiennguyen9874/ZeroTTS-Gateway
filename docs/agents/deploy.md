@@ -44,10 +44,10 @@ each node, rather than relying on independent conversions. See
 
 ## Gotchas
 
-- In the stack overlay the gateway calls `http://zerotts:8080` and ignores `ZEROTTS_GATEWAY_UPSTREAM_URL`; it starts only after `zerotts` is healthy (model loaded and warmed up).
+- In the stack overlay the gateway calls `http://zerotts:${ZEROTTS_SERVER_LISTEN_PORT:-8080}` and ignores `ZEROTTS_GATEWAY_UPSTREAM_URL`; it starts only after `zerotts` is healthy (model loaded and warmed up).
 - `zerotts_server` has no auth. It is published on `127.0.0.1:8080` for debugging and listening scripts; open `ZEROTTS_SERVER_BIND` only to a trusted network behind a firewall that admits the gateway alone. Callers talk to the gateway only.
 - The upstream image holds no weights or config: `configs/` and `models/` mount read-only at `/srv/configs`, `/srv/models`, mirroring the repo so `model_dir = "../models/ZeroTTS"` works on host and in the container. A missing host directory fails `up` instead of mounting empty.
-- `port` comes from the TOML config; changing it means also changing `ports` in the compose file and the image healthcheck.
+- Compose uses `GATEWAY_PORT` and `ZEROTTS_SERVER_PORT` for host ports; `ZEROTTS_GATEWAY_PORT` and `ZEROTTS_SERVER_LISTEN_PORT` set container listen ports. Outside Compose, the process overrides are `ZEROTTS_GATEWAY_PORT` and `ZEROTTS_SERVER_PORT`. The image healthchecks use the effective process port.
 - Upstream healthcheck is `/health`, 200 only after warmup (~10 s on a dev box; `start-period` 120 s for slow nodes). Keep `workers × threads` within the container's cores.
 - Config or voice-pack changes need `docker compose restart zerotts`, not a rebuild. Weight revision changes: see `docs/agents/zerotts-server.md#weights`.
 - After a host reboot, `restart: unless-stopped` brings both back without `depends_on` ordering, so the gateway's `/ready` is 503 until the upstream warms up.

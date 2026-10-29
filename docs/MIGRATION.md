@@ -100,7 +100,7 @@ docker compose ps
 curl --fail-with-body localhost:8000/ready
 ```
 
-Overlay đặt upstream URL thành `http://zerotts:8080`, ghi đè `ZEROTTS_GATEWAY_UPSTREAM_URL`. Weights/config được mount read-only; image không chứa weights. Nếu upstream cũ đang chiếm 8080, đổi `ZEROTTS_SERVER_PORT` sang cổng host còn trống; kết nối nội bộ stack vẫn dùng 8080. Khi chạy song song, cũng đổi `GATEWAY_PORT` và URL kiểm tra tương ứng.
+Overlay đặt upstream URL thành `http://zerotts:<ZEROTTS_SERVER_LISTEN_PORT>` (mặc định 8080), ghi đè `ZEROTTS_GATEWAY_UPSTREAM_URL`. Weights/config được mount read-only; image không chứa weights. Nếu upstream cũ đang chiếm 8080, đổi `ZEROTTS_SERVER_PORT` sang cổng host còn trống; kết nối nội bộ stack vẫn dùng `ZEROTTS_SERVER_LISTEN_PORT`. Khi chạy song song, cũng đổi `GATEWAY_PORT` và URL kiểm tra tương ứng.
 
 ### Docker: upstream ở node khác
 

@@ -13,7 +13,9 @@ curl --fail-with-body localhost:8000/v1/audio/speech -H 'Content-Type: applicati
   -d '{"model":"zerotts","input":"Hẹn gặp lúc 8h30 ngày 25/12, phí 50k.","voice":"maichi"}'
 ```
 
-Docker: `cp .env.example .env`, chọn `COMPOSE_FILE` theo hướng dẫn trong file, rồi `docker compose up -d --build`.
+Khi chạy trực tiếp, đặt `ZEROTTS_SERVER_PORT` và `ZEROTTS_GATEWAY_PORT` để ghi đè cổng lắng nghe trong TOML. Nếu đổi cổng upstream, cũng đặt `ZEROTTS_GATEWAY_UPSTREAM_URL` trỏ tới cổng đó.
+
+Docker: `cp .env.example .env`, chọn `COMPOSE_FILE` theo hướng dẫn trong file, rồi `docker compose up -d --build`. Các cổng host (`GATEWAY_PORT`, `ZEROTTS_SERVER_PORT`) độc lập với cổng process trong container (`ZEROTTS_GATEWAY_PORT`, `ZEROTTS_SERVER_LISTEN_PORT`).
 
 ## Weights int8 (tuỳ chọn)
 

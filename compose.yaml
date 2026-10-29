@@ -9,6 +9,7 @@ services:
     environment:
       ZEROTTS_GATEWAY_UPSTREAM_URL: ${ZEROTTS_GATEWAY_UPSTREAM_URL:-http://host.docker.internal:8080}
       ZEROTTS_GATEWAY_API_KEY: ${ZEROTTS_GATEWAY_API_KEY:-}
+      ZEROTTS_GATEWAY_PORT: ${ZEROTTS_GATEWAY_PORT:-8000}
     # Lets host.docker.internal reach the Docker host on Linux.
     extra_hosts:
       - host.docker.internal:host-gateway
@@ -16,4 +17,4 @@ services:
     volumes:
       - ./configs:/config:ro
     ports:
-      - ${GATEWAY_PORT:-8000}:8000
+      - ${GATEWAY_PORT:-8000}:${ZEROTTS_GATEWAY_PORT:-8000}

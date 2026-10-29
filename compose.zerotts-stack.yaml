@@ -5,7 +5,7 @@ services:
   gateway:
     environment:
       # Overrides ZEROTTS_GATEWAY_UPSTREAM_URL from .env.
-      ZEROTTS_GATEWAY_UPSTREAM_URL: http://zerotts:8080
+      ZEROTTS_GATEWAY_UPSTREAM_URL: http://zerotts:${ZEROTTS_SERVER_LISTEN_PORT:-8080}
     # Healthy means the model is loaded and warmed up, so /ready is OK once the gateway is up.
     depends_on:
       zerotts:

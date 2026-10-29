@@ -2,6 +2,7 @@
 #   ZEROTTS_SERVER_CONFIG     path to this file, when --config is not given
 #   ZEROTTS_SERVER_MODEL_DIR  model_dir
 #   ZEROTTS_SERVER_HOST       listen address
+#   ZEROTTS_SERVER_PORT       listen port
 host = "127.0.0.1"
 port = 8080
 # Local weights downloaded with `hf download --local-dir` (not the HF cache); relative to this file.

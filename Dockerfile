@@ -20,7 +20,7 @@ ENV PATH="/app/.venv/bin:$PATH" \
     ZEROTTS_GATEWAY_CONFIG=/config/gateway.toml \
     ZEROTTS_GATEWAY_HOST=0.0.0.0
 EXPOSE 8000
-# Liveness only (/health); upstream reachability is /ready. Port 8000 as in configs/gateway.toml.
+# Liveness only (/health); upstream reachability is /ready.
 HEALTHCHECK --interval=10s --timeout=5s --start-period=10s --retries=3 \
-    CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"]
+    CMD ["python", "-c", "import urllib.request; from zerotts_gateway.config import load_settings; urllib.request.urlopen(f'http://127.0.0.1:{load_settings().port}/health', timeout=3)"]
 CMD ["zerotts-gateway"]

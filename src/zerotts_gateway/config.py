@@ -10,6 +10,7 @@ ENV_CONFIG = "ZEROTTS_GATEWAY_CONFIG"
 ENV_UPSTREAM_URL = "ZEROTTS_GATEWAY_UPSTREAM_URL"
 ENV_API_KEY = "ZEROTTS_GATEWAY_API_KEY"
 ENV_HOST = "ZEROTTS_GATEWAY_HOST"
+ENV_PORT = "ZEROTTS_GATEWAY_PORT"
 
 
 @dataclass(frozen=True)
@@ -52,4 +53,6 @@ def load_settings(path: str | Path | None = None, env: Mapping[str, str] = os.en
         data["upstream_url"] = env[ENV_UPSTREAM_URL]
     if env.get(ENV_HOST):
         data["host"] = env[ENV_HOST]
+    if env.get(ENV_PORT):
+        data["port"] = int(env[ENV_PORT])
     return Settings(**data, api_key=env.get(ENV_API_KEY) or None, models=models)

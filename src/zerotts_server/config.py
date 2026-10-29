@@ -9,6 +9,7 @@ from pathlib import Path
 ENV_CONFIG = "ZEROTTS_SERVER_CONFIG"
 ENV_MODEL_DIR = "ZEROTTS_SERVER_MODEL_DIR"
 ENV_HOST = "ZEROTTS_SERVER_HOST"
+ENV_PORT = "ZEROTTS_SERVER_PORT"
 
 
 @dataclass(frozen=True)
@@ -102,4 +103,6 @@ def load_settings(path: str | Path | None = None, env: Mapping[str, str] = os.en
         data["model_dir"] = env[ENV_MODEL_DIR]
     if env.get(ENV_HOST):
         data["host"] = env[ENV_HOST]
+    if env.get(ENV_PORT):
+        data["port"] = int(env[ENV_PORT])
     return Settings(**data)

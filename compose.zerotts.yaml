@@ -9,6 +9,8 @@ services:
       dockerfile: docker/zerotts_server.Dockerfile
     image: ${ZEROTTS_SERVER_IMAGE:-zerotts-server:local}
     restart: unless-stopped
+    environment:
+      ZEROTTS_SERVER_PORT: ${ZEROTTS_SERVER_LISTEN_PORT:-8080}
     # Same layout as the repo, so configs/zerotts_server.toml (model_dir = "../models/ZeroTTS",
     # relative to itself) works unchanged. The image sets ZEROTTS_SERVER_HOST=0.0.0.0.
     # Long syntax so a missing ./models fails at "up" instead of becoming an empty directory.
@@ -18,4 +20,4 @@ services:
     # No auth: published on loopback by default (debugging, listening scripts). Set
     # ZEROTTS_SERVER_BIND only when a gateway on another host needs it, behind a firewall.
     ports:
-      - ${ZEROTTS_SERVER_BIND:-127.0.0.1}:${ZEROTTS_SERVER_PORT:-8080}:8080
+      - ${ZEROTTS_SERVER_BIND:-127.0.0.1}:${ZEROTTS_SERVER_PORT:-8080}:${ZEROTTS_SERVER_LISTEN_PORT:-8080}
