@@ -455,6 +455,8 @@ def test_startup_logs_weight_identity(make_client, tmp_path, caplog, quantized):
     [record] = [r for r in caplog.records if r.getMessage() == "weights"]
     assert record.fields == {
         "model_dir": str(tmp_path),
+        "runtime": "onnx-cpu",
+        "device": "cpu",
         "weights": "int8" if quantized else "fp32",
         **(
             {
@@ -465,6 +467,117 @@ def test_startup_logs_weight_identity(make_client, tmp_path, caplog, quantized):
             else {}
         ),
     }
+
+
+TORCH_MANIFEST = {
+    "format": "zerotts-torch",
+    "sources": {
+        "model": {"repo": "zeroweight-ai/ZeroTTS-GGUF", "revision": "92ca8651"},
+        "codec": {"repo": "OpenMOSS-Team/MOSS-Audio-Tokenizer-Nano", "revision": "6aa02b01"},
+        "assets": {"repo": "zeroweight-ai/ZeroTTS", "revision": "c2bfbd67"},
+    },
+    "files": {
+        "zerotts.safetensors": {"sha256": "b" * 64, "size": 1},
+        "codec.safetensors": {"sha256": "c" * 64, "size": 1},
+        "config.json": {"sha256": "d" * 64, "size": 1},
+    },
+}
+
+
+def torch_weights(path):
+    (path / "manifest.json").write_text(json.dumps(TORCH_MANIFEST))
+    return str(path)
+
+
+def test_torch_cuda_startup_logs_runtime_device_and_manifest(make_client, tmp_path, caplog):
+    caplog.set_level(logging.INFO, logger="zerotts_server")
+
+    client = make_client(model_dir=torch_weights(tmp_path), runtime="torch-cuda", device="cuda:1")
+
+    assert client.get("/health").status_code == 200
+    models = client.get("/v1/models").json()["data"]
+    assert [(m["id"], m["mode"], m["loaded"]) for m in models] == [
+        ("zerotts", "offline", True),
+        ("zerotts-stream", "streaming", True),
+    ]
+    [record] = [r for r in caplog.records if r.getMessage() == "weights"]
+    torch_version = record.fields.pop("torch")
+    assert torch_version is None or isinstance(torch_version, str)
+    assert record.fields == {
+        "model_dir": str(tmp_path),
+        "runtime": "torch-cuda",
+        "device": "cuda:1",
+        "weights": "fp32",
+        "format": "zerotts-torch",
+        "source_revisions": {"model": "92ca8651", "codec": "6aa02b01", "assets": "c2bfbd67"},
+        "sha256": {"zerotts.safetensors": "b" * 64, "codec.safetensors": "c" * 64},
+    }
+
+
+@pytest.mark.parametrize(("runtime", "torch_dir"), [("torch-cuda", False), ("onnx-cpu", True)])
+def test_weights_of_the_wrong_kind_fail_load(engine, tmp_path, caplog, runtime, torch_dir):
+    model_dir = torch_weights(tmp_path) if torch_dir else str(tmp_path)
+    caplog.set_level(logging.INFO, logger="zerotts_server")
+
+    with TestClient(create_app(Settings(model_dir=model_dir, runtime=runtime), engine=engine)) as c:
+        assert_error(wait_for_health(c), 503, "model_load_failed")
+        assert_error(c.post(SPEECH, json=speech_body()), 503, "model_load_failed")
+    assert not [r for r in caplog.records if r.getMessage() == "weights"]
+    assert [r.fields for r in caplog.records if r.getMessage() == "load failed"] == [
+        {"error": "ValueError"}
+    ]
+
+
+def test_torch_cuda_rejects_cfg_scale_other_than_one(engine, tmp_path):
+    models = {
+        "zerotts": ModelConfig(),
+        "zerotts-stream": ModelConfig(mode="streaming", sampling=Sampling(cfg_scale=1.5)),
+    }
+    settings = Settings(model_dir=torch_weights(tmp_path), runtime="torch-cuda", models=models)
+
+    with TestClient(create_app(settings, engine=engine)) as client:
+        assert_error(wait_for_health(client), 503, "model_load_failed")
+
+
+def test_onnx_cpu_keeps_accepting_cfg_scale(make_client):
+    client = make_client(models={"zerotts": ModelConfig(sampling=Sampling(cfg_scale=1.5))})
+
+    assert client.post(SPEECH, json=speech_body()).status_code == 200
+
+
+def test_runtime_defaults_to_onnx_cpu(make_client, caplog):
+    caplog.set_level(logging.INFO, logger="zerotts_server")
+
+    make_client(load_settings(None, env={}))
+
+    [record] = [r for r in caplog.records if r.getMessage() == "weights"]
+    assert (record.fields["runtime"], record.fields["device"]) == ("onnx-cpu", "cpu")
+
+
+def test_runtime_and_device_from_config_file_and_env(tmp_path):
+    config = tmp_path / "server.toml"
+    config.write_text('runtime = "torch-cuda"\ndevice = "cuda:3"\n')
+
+    from_file = load_settings(config, env={})
+    from_env = load_settings(
+        config, env={"ZEROTTS_SERVER_RUNTIME": "onnx-cpu", "ZEROTTS_SERVER_DEVICE": "cuda:1"}
+    )
+
+    assert (from_file.runtime, from_file.device) == ("torch-cuda", "cuda:3")
+    assert (from_env.runtime, from_env.device) == ("onnx-cpu", "cuda:1")
+
+
+@pytest.mark.parametrize(
+    "env",
+    [
+        {"ZEROTTS_SERVER_RUNTIME": "onnx-cuda"},
+        {"ZEROTTS_SERVER_DEVICE": "cpu"},
+        {"ZEROTTS_SERVER_DEVICE": "cuda:x"},
+    ],
+)
+def test_invalid_runtime_or_device_is_refused(env):
+    with pytest.raises(ValueError):
+        load_settings(None, env=env)
 
 
 # --- request errors and logs ---------------------------------------------------

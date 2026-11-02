@@ -5,7 +5,7 @@ Tests inject a fake engine (`create_app(settings, engine=...)`); production uses
 
 import threading
 from collections.abc import Iterator, Mapping, Sequence
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
@@ -54,50 +54,39 @@ class Engine(Protocol):
         """
 
 
-class _SeededSession:
-    """Wraps local_frame_decode.onnx so its random draws come from a per-request RNG.
-
-    zerotts draws them from numpy's global RNG, which other requests and libraries share.
-    """
-
-    def __init__(self, session):
-        self.session = session
-        self.rng = np.random.default_rng()
-
-    def run(self, output_names, feeds):
-        for name in ("ctrl_random_u", "audio_random_u"):
-            feeds[name] = self.rng.random(feeds[name].shape).astype(np.float32)
-        return self.session.run(output_names, feeds)
-
-    def __getattr__(self, name):
-        return getattr(self.session, name)
-
-
 class ZeroTTSEngine:
-    """One zerotts.ZeroTTS instance; synthesizes one request at a time."""
+    """One worker: a runtime's frame generator plus a codec; synthesizes one request at a time."""
 
-    def __init__(self, model_dir: str | Path, voices_dir: str | Path, threads: int):
+    def __init__(
+        self,
+        model_dir: str | Path,
+        voices_dir: str | Path,
+        threads: int,
+        runtime: str = "onnx-cpu",
+        device: str = "cuda:0",
+    ):
         self.model_dir, self.voices_dir, self.threads = Path(model_dir), Path(voices_dir), threads
+        self.runtime, self.device = runtime, device
         self._lock = threading.Lock()
         self._voices: dict = {}
         self._silence_frame = None
 
     def load(self) -> None:
-        from zerotts_server.model.synthesizer import ZeroTTS
         from zerotts_server.model.voices import discover_packs, load_voice_dir
 
-        tts = ZeroTTS(self.model_dir, intra_op_num_threads=self.threads, warmup=False)
-        tts.local_frame_decode_sess = _SeededSession(tts.local_frame_decode_sess)
+        from .runtime import load_runtime
+
+        frames, codec = load_runtime(self.model_dir, self.runtime, self.device, self.threads)
         # Voices come from voices_dir only, not zerotts's per-user install directory.
         self._voices = {
-            name: load_voice_dir(path, name, expect_queries=tts.n_voice_queries)
+            name: load_voice_dir(path, name, expect_queries=frames.n_voice_queries)
             for name, path in discover_packs(self.voices_dir).items()
         }
         silence = self.model_dir / "silence_frame.npy"
         if silence.is_file():
             self._silence_frame = np.load(silence)
-        tts.warmup()
-        self._tts = tts
+        frames.warmup()
+        self._frames, self._codec = frames, codec
 
     def voices(self) -> Mapping[str, VoiceInfo]:
         return {
@@ -115,32 +104,31 @@ class ZeroTTSEngine:
     ) -> Iterator[np.ndarray]:
         with self._lock:
             # One RNG per request, so a seed reproduces the whole multi-segment audio.
-            self._tts.local_frame_decode_sess.rng = np.random.default_rng(seed)
+            rng = np.random.default_rng(seed)
+            voice_emb = self._voices[voice].emb
             if stream:
-                yield from self._stream(segments, voice, sampling)
+                yield from self._stream(segments, voice_emb, sampling, rng)
                 return
             gap = np.zeros(int(SEGMENT_GAP_SEC * SAMPLE_RATE), dtype=np.float32)
             for i, segment in enumerate(segments):
                 if i:
                     yield gap
-                audio = self._tts.synthesize(
-                    segment, voice=self._voices[voice].emb, **asdict(sampling)
-                )
+                frames = list(self._frames.frames(segment, voice_emb, sampling, rng))
+                if not frames:
+                    continue
+                codes = np.stack(frames, axis=1)[0].transpose(1, 0)  # (K, T)
+                audio = self._codec.decode(codes[None, :, :])
                 yield audio.reshape(-1).astype(np.float32, copy=False)
 
     def _stream(
-        self, segments: Sequence[str], voice: str, sampling: Sampling
+        self, segments: Sequence[str], voice_emb: np.ndarray, sampling: Sampling, rng
     ) -> Iterator[np.ndarray]:
         """Like zerotts's webui generate_stream: one codec streaming decoder for all segments.
 
         A decoder per segment would restart the causal decoder's state and click at each
-        boundary. Uses zerotts 0.1.5's frame generator, as its synthesize_stream does.
+        boundary.
         """
-        from zerotts_server.model.synthesizer import DEFAULT_MAX_FRAMES
-
-        tts = self._tts
-        voice_emb = tts.resolve_voice(self._voices[voice].emb)
-        decoder = tts.codec.streaming_decoder()
+        decoder = self._codec.streaming_decoder()
 
         def decode(frames: list) -> np.ndarray:
             audio = decoder.decode_chunk(np.stack(frames, axis=-1))
@@ -155,9 +143,7 @@ class ZeroTTSEngine:
                         yield decode([self._silence_frame] * STREAM_GAP_FRAMES)
                 target = 1 if i == 0 else STREAM_MAX_CHUNK_FRAMES
                 frames: list = []
-                for codes in tts._generate_frames(
-                    segment, 4, DEFAULT_MAX_FRAMES, voice_emb=voice_emb, **asdict(sampling)
-                ):
+                for codes in self._frames.frames(segment, voice_emb, sampling, rng):
                     frames.append(codes)
                     if len(frames) >= target:
                         yield decode(frames)

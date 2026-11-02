@@ -23,10 +23,24 @@ server = [
     "soundfile>=0.12.1",
     "tokenizers>=0.20.0",
 ]
+# The torch-cuda runtime (ADR 0007). CUDA 12.6 wheels run on driver >= 525 (dev machine: 535).
+server-cuda = [
+    "zerotts-gateway[server]",
+    "safetensors==0.8.0",
+    "torch==2.14.1",
+]
 
 [project.scripts]
 zerotts-gateway = "zerotts_gateway:main"
 zerotts-server = "zerotts_server:main"
+
+[tool.uv.sources]
+torch = [{ index = "pytorch-cu126", extra = "server-cuda" }]
+
+[[tool.uv.index]]
+name = "pytorch-cu126"
+url = "https://download.pytorch.org/whl/cu126"
+explicit = true
 
 [build-system]
 requires = ["uv_build>=0.12.9,<0.13.0"]
@@ -37,8 +51,11 @@ module-name = ["zerotts_gateway", "zerotts_server"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = '-m "not real_model"'
-markers = ["real_model: runs the real ZeroTTS weights from models/ (skipped when absent)"]
+addopts = '-m "not real_model and not cuda"'
+markers = [
+    "real_model: runs the real ZeroTTS weights from models/ (skipped when absent)",
+    "cuda: runs the torch-cuda runtime (skipped without a GPU, torch or models/ZeroTTS-torch)",
+]
 
 [dependency-groups]
 quantize = [

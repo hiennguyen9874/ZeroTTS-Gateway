@@ -1,11 +1,22 @@
 # zerotts_server config (the ZeroTTS upstream, ADR 0005). Env overrides:
 #   ZEROTTS_SERVER_CONFIG     path to this file, when --config is not given
 #   ZEROTTS_SERVER_MODEL_DIR  model_dir
+#   ZEROTTS_SERVER_RUNTIME    runtime
+#   ZEROTTS_SERVER_DEVICE     device
 #   ZEROTTS_SERVER_HOST       listen address
 #   ZEROTTS_SERVER_PORT       listen port
 host = "127.0.0.1"
 port = 8080
+# How the model runs (ADR 0007): "onnx-cpu" (default, onnxruntime on CPU) or "torch-cuda" (PyTorch
+# on one GPU, needs the server-cuda extra). Never falls back: torch-cuda without torch, a GPU or
+# enough VRAM for every worker fails the load (/health 503 model_load_failed). The same seed gives
+# the same audio only on the same runtime and weights; torch-cuda and onnx-cpu differ.
+runtime = "onnx-cpu"
+# GPU for torch-cuda: "cuda" or "cuda:<index>"; one process per GPU. Unused by onnx-cpu.
+device = "cuda:0"
 # Local weights downloaded with `hf download --local-dir` (not the HF cache); relative to this file.
+# Must match runtime: an ONNX directory (models/ZeroTTS, models/ZeroTTS-int8) for onnx-cpu, the
+# directory built by scripts/build_zerotts_torch.py (models/ZeroTTS-torch) for torch-cuda.
 model_dir = "../models/ZeroTTS"
 # Voice packs (<name>/voice.npz + meta.json); default <model_dir>/voices. Drop a pack in, restart.
 # voices_dir = "../models/ZeroTTS/voices"
@@ -13,6 +24,7 @@ model_dir = "../models/ZeroTTS"
 # request at a time.
 workers = 1
 # onnxruntime intra-op threads per worker; workers × threads should not exceed the CPU cores.
+# onnx-cpu only, except that torch-cuda's codec still runs on ONNX CPU with these threads (#19).
 threads = 8
 # Seconds a request waits for a free worker before it gets 503 server_busy; 0 means no wait.
 busy_timeout = 5.0
@@ -24,6 +36,7 @@ busy_timeout = 5.0
 default_voice = "maichi"
 
 [models.zerotts.sampling]
+# torch-cuda supports only 1.0; any other value fails the load.
 cfg_scale = 1.0
 text_temperature = 1.0
 text_topk = 50

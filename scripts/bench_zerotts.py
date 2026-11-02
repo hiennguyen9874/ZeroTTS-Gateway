@@ -192,7 +192,7 @@ def main() -> int:
     }
 
     profile: dict = {}
-    tts = engine._tts
+    tts = engine._frames.tts  # onnx-cpu runtime; its codec is the engine's
     tts.text_encoder_sess = _Timed(tts.text_encoder_sess, "text_encoder", profile)
     tts.prefix_step_sess = _Timed(tts.prefix_step_sess, "prefix_step", profile)
     # Inside the engine's _SeededSession, which must stay outermost to receive the seeded RNG.

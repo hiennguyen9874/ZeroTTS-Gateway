@@ -1,6 +1,7 @@
 """zerotts_server configuration: a TOML file plus environment overrides."""
 
 import os
+import re
 import tomllib
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -10,6 +11,10 @@ ENV_CONFIG = "ZEROTTS_SERVER_CONFIG"
 ENV_MODEL_DIR = "ZEROTTS_SERVER_MODEL_DIR"
 ENV_HOST = "ZEROTTS_SERVER_HOST"
 ENV_PORT = "ZEROTTS_SERVER_PORT"
+ENV_RUNTIME = "ZEROTTS_SERVER_RUNTIME"
+ENV_DEVICE = "ZEROTTS_SERVER_DEVICE"
+# How the model runs (ADR 0007); see runtime.py. Kept here so config needs no runtime imports.
+RUNTIMES = ("onnx-cpu", "torch-cuda")
 
 
 @dataclass(frozen=True)
@@ -53,7 +58,11 @@ class Settings:
     voices_dir: str | None = None
     # Workers, each holding its own model instance and running one request at a time.
     workers: int = 1
-    # onnxruntime intra-op threads per worker.
+    # "onnx-cpu" (onnxruntime on CPU) or "torch-cuda" (PyTorch on one GPU); never falls back.
+    runtime: str = "onnx-cpu"
+    # GPU for torch-cuda, "cuda" or "cuda:<index>"; unused by onnx-cpu.
+    device: str = "cuda:0"
+    # onnxruntime intra-op threads per worker (onnx-cpu; the torch-cuda codec until #19).
     threads: int = 8
     # Seconds a request waits for a free worker before it gets 503 server_busy.
     busy_timeout: float = 5.0
@@ -75,6 +84,10 @@ class Settings:
             isinstance(self.busy_timeout, int | float) and self.busy_timeout >= 0
         ):
             raise ValueError("busy_timeout must be a number of seconds >= 0")
+        if self.runtime not in RUNTIMES:
+            raise ValueError(f"runtime must be one of {RUNTIMES}")
+        if not re.fullmatch(r"cuda(:\d+)?", self.device):
+            raise ValueError('device must be "cuda" or "cuda:<index>"')
 
     @property
     def voices_path(self) -> Path:
@@ -101,6 +114,10 @@ def load_settings(path: str | Path | None = None, env: Mapping[str, str] = os.en
         }
     if env.get(ENV_MODEL_DIR):
         data["model_dir"] = env[ENV_MODEL_DIR]
+    if env.get(ENV_RUNTIME):
+        data["runtime"] = env[ENV_RUNTIME]
+    if env.get(ENV_DEVICE):
+        data["device"] = env[ENV_DEVICE]
     if env.get(ENV_HOST):
         data["host"] = env[ENV_HOST]
     if env.get(ENV_PORT):

@@ -11,7 +11,6 @@ import unicodedata
 import wave
 from collections.abc import AsyncIterator, Callable, Iterator
 from contextlib import asynccontextmanager, suppress
-from pathlib import Path
 
 import numpy as np
 from fastapi import FastAPI, Request
@@ -22,6 +21,7 @@ from zerotts_server.model.chunking import chunk_text
 
 from .config import Settings
 from .engine import SAMPLE_RATE, Engine, ZeroTTSEngine
+from .runtime import weights_identity
 
 log = logging.getLogger("zerotts_server")
 
@@ -223,7 +223,13 @@ def split_segments(text: str) -> list[str]:
 def create_app(settings: Settings, engine: Engine | None = None) -> FastAPI:
     if engine is None:
         engines = [
-            ZeroTTSEngine(settings.model_dir, settings.voices_path, settings.threads)
+            ZeroTTSEngine(
+                settings.model_dir,
+                settings.voices_path,
+                settings.threads,
+                settings.runtime,
+                settings.device,
+            )
             for _ in range(settings.workers)
         ]
     else:
@@ -237,15 +243,11 @@ def create_app(settings: Settings, engine: Engine | None = None) -> FastAPI:
     def load() -> None:
         start = time.perf_counter()
         try:
-            fields = {"model_dir": str(settings.model_dir), "weights": "fp32"}
-            manifest_path = Path(settings.model_dir) / "quantization.json"
-            if manifest_path.is_file():
-                manifest = json.loads(manifest_path.read_text())
-                fields.update(
-                    weights="int8",
-                    source_revision=manifest["source_revision"],
-                    sha256={name: graph["sha256"] for name, graph in manifest["graphs"].items()},
-                )
+            if settings.runtime == "torch-cuda":
+                for model_id, model in settings.models.items():
+                    if model.sampling.cfg_scale != 1:
+                        raise ValueError(f"model {model_id}: torch-cuda supports only cfg_scale 1")
+            fields = weights_identity(settings.model_dir, settings.runtime, settings.device)
             log.info("weights", extra={"fields": fields})
             for worker in dict.fromkeys(engines):
                 worker.load()

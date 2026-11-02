@@ -1,6 +1,6 @@
 # zerotts_server
 
-The upstream (ADR 0005): runs vendored ZeroTTS code on onnxruntime CPU and speaks the part of audio.cpp's API the gateway uses. Code: `src/zerotts_server/` (`app.py` routes, `engine.py` synthesis, `config.py`). Config keys, defaults and env overrides are documented in `configs/zerotts_server.toml`; relative paths resolve from the config file's directory.
+The upstream (ADR 0005): runs the ZeroTTS model on a **runtime** (`onnx-cpu` by default, or `torch-cuda`, ADR 0007) and speaks the part of audio.cpp's API the gateway uses. Code: `src/zerotts_server/` (`app.py` routes, `engine.py` synthesis, `runtime.py` the runtime seam, `torch_runtime.py` the PyTorch model, `config.py`). Config keys, defaults and env overrides are documented in `configs/zerotts_server.toml`; relative paths resolve from the config file's directory.
 
 ```bash
 uv sync                      # dev group pulls in the `server` extra
@@ -8,6 +8,16 @@ uv run zerotts-server --config configs/zerotts_server.toml
 ```
 
 The server listens at once and loads plus warms up the model in the background; `/health` is 503 until done.
+
+## Runtimes
+
+`runtime` (`ZEROTTS_SERVER_RUNTIME`) and `device` (`ZEROTTS_SERVER_DEVICE`) are server-level; callers see no difference and `/v1/models` is unchanged.
+
+- `onnx-cpu` (default): the vendored ONNX graphs on onnxruntime CPU; `threads` per worker. Audio is byte-identical to before the seam (the #16 SHA-256 tests pass).
+- `torch-cuda`: `TorchZeroTTS` in `torch_runtime.py`, a PyTorch port of `references/ZeroTTS-repo/cpp/src/zerotts.cpp` reading `models/ZeroTTS-torch`. This slice (#18) is eager fp32, with a preallocated global KV cache written by position. The codec is **temporarily ONNX CPU** (`onnx/codec/`, `threads`) until #19. Offline and streaming both work. Install with `uv sync --extra server-cuda` (torch 2.14.1+cu126 from the PyTorch index, `safetensors`); the default dev sync and the CPU image have no torch.
+- Seam: `runtime.FrameGenerator.frames(text, voice_emb, sampling, rng)` yields (1, K) int64 codes per frame; `ZeroTTSEngine` joins it with a codec (offline `decode`, or one `streaming_decoder` across segments). Both runtimes draw the sampler's random numbers with `runtime.draw_u` from the per-request numpy RNG in the same order (control, then K codebooks, per frame). The torch sampler mirrors `local_frame_decode.onnx` op for op: stable full sort, rank ≥ k → -inf, softmax, drop ranks whose preceding mass > top-p, softmax again, first CDF > u. A forbidden `<eoa>` is -FLT_MAX.
+- **No fallback to CPU.** Startup fails with `model_load_failed` (`/health` 503) when: the weights directory does not match the runtime (`manifest.json` `format: "zerotts-torch"` ↔ `torch-cuda`; anything else ↔ `onnx-cpu`); any model has `cfg_scale` ≠ 1 under `torch-cuda`; torch is missing, CUDA is unavailable, the device index does not exist, or loading N workers runs out of VRAM. Each worker loads its own weights and caches on `device`. A `device` that is not `cuda`/`cuda:<n>`, or an unknown `runtime`, is a config error at startup. A CUDA error mid-request is an engine error (500, SSE `error`, truncated PCM).
+- Seed: same seed, runtime and weights → same audio. `torch-cuda` and `onnx-cpu` give different audio for the same seed: equal draws give equal codes except at fp32 near-ties, after which the takes diverge, and the codec paths differ.
 
 ## Weights
 
@@ -90,8 +100,11 @@ safetensors), `codec_onnx_check` and `files` (SHA-256 and size of every other fi
 writing, the script re-reads both safetensors and checks every GGUF tensor is equal and every
 initializer of both codec ONNX graphs equals a codec tensor (direct, transposed or folded
 weight-norm, max abs diff ≤ 1e-6; 17 folded, 8.9e-8 observed). Two runs gave identical
-SHA-256 for every file: `docs/reports/issue17-zerotts-torch-weights.md`. The server cannot load
-this directory yet (#18).
+SHA-256 for every file: `docs/reports/issue17-zerotts-torch-weights.md`. Serve it with
+`ZEROTTS_SERVER_RUNTIME=torch-cuda ZEROTTS_SERVER_MODEL_DIR=models/ZeroTTS-torch`; the startup
+`weights` record then has `runtime`, `device`, `weights: fp32`, `format`, `source_revisions`
+(model, codec, assets), `sha256` of both safetensors (from the manifest) and the `torch` version.
+`onnx-cpu` records carry `runtime: onnx-cpu` and `device: cpu`.
 
 ## Workers and voices
 
@@ -114,7 +127,7 @@ Audio is always mono 48 kHz 16-bit little-endian.
 
 - `voice`: missing → model's `default_voice`; unknown → `400 unknown_voice`.
 - `input` is NFC-normalized, then split by `zerotts`'s `chunk_text`: sentences grouped up to ~15 s (225 chars), overlong sentences split at commas, then words. Punctuation is never added or changed and meaningful symbols (`C++`, `1+1`) stay. Segments synthesize sequentially with one seeded RNG, joined by 0.15 s silence into one WAV. Nothing speakable left (`... !!`) → `400 invalid_request_error`.
-- `seed` or `options.seed`: integer in [0, 2^64), decimal string accepted; per-request RNG, never numpy's global one. Same seed and same weights/runtime, same audio; fp32 and int8 differ.
+- `seed` or `options.seed`: integer in [0, 2^64), decimal string accepted; per-request RNG, never numpy's global one. Same seed and same weights/runtime, same audio; fp32 and int8, or `onnx-cpu` and `torch-cuda`, differ.
 - `400 unsupported_option`: `voice_ref`, `reference_text`, `instruct`, `instructions`, `speed`/`speaking_rate` other than 1, any `options` key except `seed`.
 - Mode mismatch (stream request to an offline model, or non-stream request to a streaming model) → `400 invalid_request_error`. audio.cpp would return WAV for the latter; spec #1 chose to reject.
 
@@ -133,6 +146,16 @@ One JSON line per request: model, voice, seed, char count, `segments`, `wait_ms`
 ## Tests
 
 `tests/test_server.py` uses a fake engine. `tests/test_server_smoke.py` (marker `real_model`) is deselected by default; run `uv run python -m pytest -m real_model`, which still skips without weights in `models/ZeroTTS` (or `ZEROTTS_SERVER_MODEL_DIR` when set). To check int8: `ZEROTTS_SERVER_MODEL_DIR=models/ZeroTTS-int8 uv run python -m pytest -m real_model tests/test_server_smoke.py`.
+
+`tests/test_torch_cuda.py` (marker `cuda`) is deselected by default and skips without torch, a GPU or `models/ZeroTTS-torch`; the parity test also needs `models/ZeroTTS` and `onnx`. Pin a free GPU:
+
+```bash
+uv sync --extra server-cuda --group torch-weights
+CUDA_VISIBLE_DEVICES=2 uv run python -m pytest -m cuda tests/test_torch_cuda.py -s
+uv sync   # back to the default environment
+```
+
+The parity test runs the golden set (non-error cases of `tests/golden/pipeline.json`) through both runtimes with the same voice and seed: lockstep with torch teacher-forced to the ONNX codes (`frame(..., forced=...)`, as `zerotts_frame_forced`) compares hidden and logits within 1e-4 + 1e-5·max|ref| and allows a different pick only at a near-tie; free-running `frames()` must equal ONNX up to the first near-tie. About 11 minutes on an A100 plus CPU. Results: `docs/reports/issue18-torch-cuda-eager.md`. The HTTP smoke tests cover WAV 48 kHz mono, seed reproducibility, streaming and `cuda:99` → `model_load_failed`.
 
 ## Vendored model code
 
