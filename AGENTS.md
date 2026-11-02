@@ -12,7 +12,7 @@ A thin **gateway** in front of a TTS **upstream**, `zerotts_server` (ZeroTTS on 
 
 - Use the terms in `GLOSSARY.md` (gateway, upstream, caller, operator, input text, engine text, effective language, text warning, non-verbal tag, voice) in code, docs and issues.
 - Code, comments and agent docs (`AGENTS.md`, `docs/agents/`) in English; human docs (`README.md`, `docs/MIGRATION.md`), ADRs, reports and issues in Vietnamese.
-- Tests go through HTTP only and assert observable behaviour (status, body, headers, what the fake upstream received). Gateway: fake upstream via `create_app(settings, transport=...)`. `zerotts_server`: fake engine via `create_app(settings, engine=...)`.
+- Tests go through HTTP only and assert observable behaviour (status, body, headers, what the fake upstream received). Gateway: fake upstream via `create_app(settings, transport=...)`. `zerotts_server`: fake engine via `create_app(settings, engine=...)`. Invalid startup configuration may be tested directly when it prevents the HTTP app from being created. Issue #15 also permits runtime-seam parity tests; their acceptance helpers may be tested directly without a GPU.
 - Error bodies use audio.cpp's shape `{"error":{"message","type"}}`. Messages and logs carry no request text and no audio.
 - `references/` is read-only pinned submodules; weights go in gitignored `models/`.
 - Check: `uv run pytest`, `uv run ruff check .`, `uv run ruff format --check .`.

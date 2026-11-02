@@ -262,13 +262,14 @@ class TorchZeroTTS:
             ctrl = ctrl.clone()
             ctrl[1] = torch.finfo(ctrl.dtype).min
         ctrl = ctrl / max(sampling.text_temperature, MIN_TEMPERATURE)
+        # The ONNX feeds coerce positive top-k values to int64 before clipping.
         text_topk = sampling.text_topk if sampling.text_topk > 0 else self.codebook_size
         ctrl_u = torch.as_tensor(ctrl_u, device=self.device).reshape(())
-        is_eoa = self._sample(ctrl, ctrl_u, min(max(text_topk, 1), 2), 1.0) == 1
+        is_eoa = self._sample(ctrl, ctrl_u, min(max(int(text_topk), 1), 2), 1.0) == 1
 
         audio_u = torch.as_tensor(audio_u, device=self.device).reshape(-1)
         audio_topk = sampling.audio_topk if sampling.audio_topk > 0 else self.codebook_size
-        audio_topk = min(max(audio_topk, 1), self.codebook_size)
+        audio_topk = min(max(int(audio_topk), 1), self.codebook_size)
         topp = min(max(sampling.audio_topp, MIN_TOPP), 1.0)
         penalty = sampling.audio_repetition_penalty
         temperature = max(sampling.audio_temperature, MIN_TEMPERATURE)

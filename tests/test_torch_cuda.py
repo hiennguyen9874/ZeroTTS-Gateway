@@ -89,10 +89,11 @@ def voice(name: str) -> np.ndarray:
     return load_voice_dir(TORCH_DIR / "voices" / name).emb
 
 
-def segment_codes(generator, segments, voice_emb, seed) -> list[np.ndarray]:
+def segment_codes(generator, segments, voice_emb, seed, sampling=None) -> list[np.ndarray]:
     """Codes of each segment, one RNG across them, as the engine draws them."""
+    sampling = sampling or Sampling()
     rng = np.random.default_rng(seed)
-    return [np.concatenate(list(generator.frames(s, voice_emb, Sampling(), rng))) for s in segments]
+    return [np.concatenate(list(generator.frames(s, voice_emb, sampling, rng))) for s in segments]
 
 
 # --- runtime seam: torch-cuda fp32 against onnx-cpu ------------------------------
@@ -125,24 +126,31 @@ def compare(worst: dict, key: str, ours, theirs) -> None:
     )
 
 
-def near_tie(scaled: np.ndarray, u: float, topk: int, topp: float, a: int, b: int) -> bool:
-    """Whether fp32 noise on the logits can turn the sampler's pick from a into b.
+def near_tie(reference, perturbed, u: float, topk: int, topp: float, a: int, b: int) -> bool:
+    """Accept a mismatch only if bounded logit noise reproduces both actual picks.
 
-    The picks swap when their logits nearly tie in the sort, or when u or topp sits on a
-    boundary of the (ONNX-ordered) CDF.
+    Replaying both distributions accounts for sort, top-k, nucleus and draw boundaries
+    without treating an unrelated boundary elsewhere in the distribution as evidence.
     """
-    if abs(float(scaled[a]) - float(scaled[b])) <= 2 * ATOL:
-        return True
-    values = np.sort(scaled.astype(np.float64))[::-1][:topk]
-    p = np.exp(values - values[0])
-    p /= p.sum()
-    before = np.cumsum(p) - p
-    q = np.where(before <= topp, p, 0.0)
-    cdf = np.cumsum(q / q.sum())
-    return bool(np.min(np.abs(cdf - u)) <= ATOL or np.min(np.abs(before - topp)) <= ATOL)
+    reference = np.asarray(reference, np.float64)
+    perturbed = np.asarray(perturbed, np.float64)
+    scale = np.abs(reference[np.abs(reference) < 1e30]).max()
+    if np.max(np.abs(perturbed - reference)) > ATOL + RTOL * scale:
+        return False
+
+    def pick(logits):
+        order = np.argsort(-logits, kind="stable")[: min(max(int(topk), 1), len(logits))]
+        values = logits[order]
+        p = np.exp(values - values[0])
+        p /= p.sum()
+        p = np.where(np.cumsum(p) - p <= np.clip(topp, 1e-6, 1.0), p, 0.0)
+        cdf = np.cumsum(p / p.sum())
+        return int(order[np.argmax(cdf > np.clip(u, 0.0, 0.999999))])
+
+    return pick(perturbed) == a and pick(reference) == b
 
 
-def lockstep(session, tts, model, segments, emb, seed, worst):
+def lockstep(session, tts, model, segments, emb, seed, worst, sampling=None):
     """Run onnx-cpu frame by frame with torch-cuda teacher-forced to the ONNX codes.
 
     Compares the global hidden and the sampler's scaled logits at every frame and checks the
@@ -151,7 +159,7 @@ def lockstep(session, tts, model, segments, emb, seed, worst):
     """
     import torch
 
-    sampling = Sampling()
+    sampling = sampling or Sampling()
     K, C = tts.num_codebooks, tts.codebook_size
     rng = np.random.default_rng(seed)
     first_tie = None
@@ -175,9 +183,13 @@ def lockstep(session, tts, model, segments, emb, seed, worst):
                     "global_hidden": h_o,
                     "forbid_eoa": np.array([forbid]),
                     "text_temperature": np.array([sampling.text_temperature], np.float32),
-                    "text_topk": np.array([sampling.text_topk]),
+                    "text_topk": np.array(
+                        [sampling.text_topk if sampling.text_topk > 0 else C], np.int64
+                    ),
                     "audio_temperature": np.array([sampling.audio_temperature], np.float32),
-                    "audio_topk": np.array([sampling.audio_topk]),
+                    "audio_topk": np.array(
+                        [sampling.audio_topk if sampling.audio_topk > 0 else C], np.int64
+                    ),
                     "audio_topp": np.array([sampling.audio_topp], np.float32),
                     "audio_repetition_penalty": np.array(
                         [sampling.audio_repetition_penalty], np.float32
@@ -194,15 +206,28 @@ def lockstep(session, tts, model, segments, emb, seed, worst):
                 h_t, forbid, sampling, ctrl_u, audio_u, seen_t, forced=forced
             )
             ctrl_o, audio_o = logits[0][0], np.concatenate(logits[1:])
-            compare(worst, "ctrl_logits", ctrl_t.cpu(), ctrl_o)
-            compare(worst, "audio_logits", audio_t.cpu(), audio_o)
-            picks = [(bool(eoa_t), bool(is_eoa[0]), ctrl_o, ctrl_u[0], 2, 1.0)] + [
-                (int(ours), int(theirs), audio_o[c], audio_u[0, c], 25, sampling.audio_topp)
+            ctrl_t, audio_t = ctrl_t.cpu().numpy(), audio_t.cpu().numpy()
+            compare(worst, "ctrl_logits", ctrl_t, ctrl_o)
+            compare(worst, "audio_logits", audio_t, audio_o)
+            text_topk = sampling.text_topk if sampling.text_topk > 0 else C
+            audio_topk = sampling.audio_topk if sampling.audio_topk > 0 else C
+            picks = [(bool(eoa_t), bool(is_eoa[0]), ctrl_o, ctrl_t, ctrl_u[0], text_topk, 1.0)] + [
+                (
+                    int(ours),
+                    int(theirs),
+                    audio_o[c],
+                    audio_t[c],
+                    audio_u[0, c],
+                    audio_topk,
+                    sampling.audio_topp,
+                )
                 for c, (ours, theirs) in enumerate(zip(codes_t.cpu(), codes, strict=True))
             ]
-            for ours, theirs, scaled, u, topk, topp in picks:
+            for ours, theirs, reference_logits, torch_logits, u, topk, topp in picks:
                 if ours != theirs:
-                    assert near_tie(scaled, u, topk, topp, int(ours), int(theirs)), (s, t)
+                    assert near_tie(
+                        reference_logits, torch_logits, u, topk, topp, int(ours), int(theirs)
+                    ), (s, t)
                     worst["near_ties"] += 1
                     first_tie = first_tie or (s, t)
             seen_o[0, np.arange(K), codes] = True
@@ -270,6 +295,38 @@ def test_golden_set_matches_onnx(torch_model, onnx_generator):
     assert worst["tolerance_used"] <= 1, worst
 
 
+@needs_onnx
+@pytest.mark.parametrize(
+    "sampling",
+    [
+        Sampling(text_topk=1.5, audio_topk=1.5),
+        Sampling(text_topk=0.5, audio_topk=0.5),
+        Sampling(
+            text_topk=0,
+            audio_topk=64,
+            audio_topp=0.8,
+            text_temperature=0.9,
+            audio_temperature=1.1,
+            audio_repetition_penalty=1.05,
+        ),
+    ],
+)
+def test_nondefault_sampling_matches_onnx(torch_model, onnx_generator, sampling):
+    session, count = onnx_session_with_logits()
+    assert count == onnx_generator.tts.num_codebooks + 1
+    worst = {"hidden": 0, "ctrl_logits": 0, "audio_logits": 0, "tolerance_used": 0, "near_ties": 0}
+    segments, emb = ["Xin chào."], voice("maichi")
+    reference, first_tie = lockstep(
+        session, onnx_generator.tts, torch_model, segments, emb, 42, worst, sampling
+    )
+    actual = segment_codes(torch_model, segments, emb, 42, sampling)
+    if first_tie is None:
+        assert np.array_equal(actual[0], reference[0])
+    else:
+        _, frame = first_tie
+        assert np.array_equal(actual[0][:frame], reference[0][:frame])
+
+
 # --- HTTP smoke on torch-cuda ---------------------------------------------------
 
 
@@ -278,8 +335,8 @@ def client(device):
     settings = Settings(model_dir=str(TORCH_DIR), runtime="torch-cuda", device=device)
     with TestClient(create_app(settings)) as client:
         deadline = time.monotonic() + 300
-        while client.get("/health").status_code != 200:
-            assert client.get("/health").json()["error"]["type"] == "model_loading"
+        while (response := client.get("/health")).status_code != 200:
+            assert response.json()["error"]["type"] == "model_loading"
             assert time.monotonic() < deadline, "model did not load"
             time.sleep(0.5)
         yield client

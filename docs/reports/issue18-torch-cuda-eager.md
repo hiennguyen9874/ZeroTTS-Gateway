@@ -2,7 +2,7 @@
 
 Môi trường: một A100-PCIE-40GB trống (`CUDA_VISIBLE_DEVICES=2`), driver 535.230.02, torch 2.14.1+cu126, onnxruntime 1.31.1 (CPU, 8 thread), numpy 2.5.4, Python 3.12.14. Weights: `models/ZeroTTS-torch` (#17) cho torch, `models/ZeroTTS` fp32 revision `c2bfbd67` cho ONNX.
 
-## Cách đo
+## Cách đo ban đầu
 
 `tests/test_torch_cuda.py::test_golden_set_matches_onnx` chạy trên golden set (194 ca không lỗi của `tests/golden/pipeline.json`, lấy `expected` làm engine text và chia segment như server). Ca thứ `i` dùng giọng `maichi` hoặc `quangminh` (xen kẽ), seed `i`, sampling mặc định, và một RNG cho mọi segment như engine.
 
@@ -38,3 +38,19 @@ uv sync
 ```
 
 Dòng `golden parity: ...` in ra số ca, số frame, số ca lệch sau near-tie và các sai khác lớn nhất. Mất khoảng 11 phút.
+
+## Sửa sau review #18
+
+- Torch ép top-k dương sang số nguyên trước khi giới hạn, giống feed int64 của ONNX; giữ nguyên hành vi cấu hình hiện có.
+- Ngoại lệ near-tie nay phải tái lập đúng cả hai lựa chọn từ logits thực tế của hai runtime, với sai khác trong ngưỡng đã nêu. Không chấp nhận chỉ vì có một ranh giới top-p/CDF gần đó nhưng không giải thích được hai lựa chọn.
+- Poll `/health` dùng một response mỗi vòng, tránh lỗi `KeyError` khi model vừa nạp xong. Test CPU tái hiện lỗi với chuỗi 503 → 200 và pass sau sửa.
+- Test config/env hợp lệ nay gọi HTTP với engine giả, kiểm tra health, speech, models và log weights. Cấu hình sai bị từ chối trước khi tạo app được phép kiểm tra trực tiếp.
+- Thêm test CUDA cho sampling khác mặc định (top-k 1,5; 0,5; 64 và top-p/temperature/repetition penalty khác mặc định), cùng test CPU cho bộ kiểm chứng near-tie.
+
+Kiểm chứng sau sửa:
+- `uv run pytest`: **511 passed, 1 skipped, 13 deselected**.
+- `uv run pytest -m real_model tests/test_server_smoke.py -rs`: **4 passed, 1 skipped**; ca SHA-256 cần `ZEROTTS_VENDOR_BASELINE` nên chưa xác nhận lại byte-equivalence.
+- `uv run ruff check .`, `uv run ruff format --check .`, `git diff --check`: pass.
+- Log lần chạy: `/tmp/zerotts-issue18-fixes-pytest.log` và `/tmp/zerotts-issue18-fixes-real-model.log` (tệp tạm trên máy kiểm thử).
+
+Các số đo GPU ở trên thuộc lần chạy ban đầu, không phải kết quả chạy lại sau sửa. Lần sửa này chưa cài extra `server-cuda`, nên cả 8 ca CUDA đều skip; phải chạy lại lệnh GPU ở trên trước khi xác nhận parity sau sửa.

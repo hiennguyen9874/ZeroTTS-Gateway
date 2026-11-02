@@ -155,7 +155,7 @@ CUDA_VISIBLE_DEVICES=2 uv run python -m pytest -m cuda tests/test_torch_cuda.py 
 uv sync   # back to the default environment
 ```
 
-The parity test runs the golden set (non-error cases of `tests/golden/pipeline.json`) through both runtimes with the same voice and seed: lockstep with torch teacher-forced to the ONNX codes (`frame(..., forced=...)`, as `zerotts_frame_forced`) compares hidden and logits within 1e-4 + 1e-5·max|ref| and allows a different pick only at a near-tie; free-running `frames()` must equal ONNX up to the first near-tie. About 11 minutes on an A100 plus CPU. Results: `docs/reports/issue18-torch-cuda-eager.md`. The HTTP smoke tests cover WAV 48 kHz mono, seed reproducibility, streaming and `cuda:99` → `model_load_failed`.
+The parity test runs the golden set (non-error cases of `tests/golden/pipeline.json`) through both runtimes with the same voice and seed: lockstep with torch teacher-forced to the ONNX codes (`frame(..., forced=...)`, as `zerotts_frame_forced`) compares hidden and logits within 1e-4 + 1e-5·max|ref| and allows a different pick only at a near-tie; free-running `frames()` must equal ONNX up to the first near-tie. About 11 minutes on an A100 plus CPU. Results: `docs/reports/issue18-torch-cuda-eager.md`. The HTTP smoke tests cover WAV 48 kHz mono, seed reproducibility, streaming and `cuda:99` → `model_load_failed`. A near-tie exemption must replay both actual picks from the two runtimes' logits within the stated tolerance, not merely find a nearby boundary. Additional CUDA cases cover nondefault sampling, including fractional top-k values coerced to integers as ONNX does. `tests/test_torch_cuda_validation.py` checks the acceptance helper and readiness polling on CPU.
 
 ## Vendored model code
 

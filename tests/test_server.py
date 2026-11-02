@@ -554,17 +554,46 @@ def test_runtime_defaults_to_onnx_cpu(make_client, caplog):
     assert (record.fields["runtime"], record.fields["device"]) == ("onnx-cpu", "cpu")
 
 
-def test_runtime_and_device_from_config_file_and_env(tmp_path):
+@pytest.mark.parametrize(
+    ("file_runtime", "env", "expected_runtime", "expected_device"),
+    [
+        ("torch-cuda", {}, "torch-cuda", "cuda:3"),
+        (
+            "torch-cuda",
+            {"ZEROTTS_SERVER_RUNTIME": "onnx-cpu", "ZEROTTS_SERVER_DEVICE": "cuda:1"},
+            "onnx-cpu",
+            "cpu",
+        ),
+        (
+            "onnx-cpu",
+            {"ZEROTTS_SERVER_RUNTIME": "torch-cuda", "ZEROTTS_SERVER_DEVICE": "cuda:1"},
+            "torch-cuda",
+            "cuda:1",
+        ),
+    ],
+)
+def test_runtime_and_device_from_config_file_and_env(
+    make_client, tmp_path, caplog, file_runtime, env, expected_runtime, expected_device
+):
+    caplog.set_level(logging.INFO, logger="zerotts_server")
+    if expected_runtime == "torch-cuda":
+        torch_weights(tmp_path)
     config = tmp_path / "server.toml"
-    config.write_text('runtime = "torch-cuda"\ndevice = "cuda:3"\n')
+    config.write_text(f'runtime = "{file_runtime}"\ndevice = "cuda:3"\nmodel_dir = "."\n')
 
-    from_file = load_settings(config, env={})
-    from_env = load_settings(
-        config, env={"ZEROTTS_SERVER_RUNTIME": "onnx-cpu", "ZEROTTS_SERVER_DEVICE": "cuda:1"}
+    client = make_client(load_settings(config, env=env))
+
+    assert client.get("/health").json() == {"status": "ok", "models": 2}
+    assert client.post(SPEECH, json=speech_body(seed=123)).status_code == 200
+    assert [(m["id"], m["mode"], m["loaded"]) for m in client.get("/v1/models").json()["data"]] == [
+        ("zerotts", "offline", True),
+        ("zerotts-stream", "streaming", True),
+    ]
+    [record] = [r for r in caplog.records if r.getMessage() == "weights"]
+    assert (record.fields["runtime"], record.fields["device"]) == (
+        expected_runtime,
+        expected_device,
     )
-
-    assert (from_file.runtime, from_file.device) == ("torch-cuda", "cuda:3")
-    assert (from_env.runtime, from_env.device) == ("onnx-cpu", "cuda:1")
 
 
 @pytest.mark.parametrize(
