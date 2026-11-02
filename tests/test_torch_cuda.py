@@ -1,7 +1,9 @@
 """Opt-in tests of the torch-cuda runtime on a GPU (marker `cuda`, ADR 0007).
 
 Skipped without torch, a CUDA device or models/ZeroTTS-torch; the parity tests also need the fp32
-ONNX weights in models/ZeroTTS. Run on a free GPU, e.g.:
+ONNX weights in models/ZeroTTS. The parity tests run the fp32 model with its CUDA Graphs (the
+engine's `frames()` replays them; lockstep drives the same code eagerly); the HTTP tests run the
+server as deployed, fp16 with CUDA Graphs. Run on a free GPU, e.g.:
 
   CUDA_VISIBLE_DEVICES=2 uv run --extra server-cuda --group torch-weights \\
       python -m pytest -m cuda tests/test_torch_cuda.py -s
@@ -43,6 +45,9 @@ VOICES = ("maichi", "quangminh")
 # where one fp32 ulp is ~1.5e-5. Observed maxima are printed (run with -s).
 ATOL = 1e-4
 RTOL = 1e-5
+# fp16 against fp32 on the same history: |fp16 - fp32| <= FP16_RTOL * max|fp32| per tensor
+# (observed ~0.25%); a wrong position or mask moves them by a whole scale.
+FP16_RTOL = 0.01
 # PyTorch fp32 codec against ONNX offline on the same codes, audio peaks near 1.
 CODEC_ATOL = 1e-4
 CODEC_MIN_SNR_DB = 80
@@ -84,6 +89,15 @@ def device():
 
 @pytest.fixture(scope="module")
 def torch_model(device):
+    from zerotts_server.torch_runtime import TorchZeroTTS
+
+    model = TorchZeroTTS(TORCH_DIR, device, dtype="float32")
+    model.warmup()
+    return model
+
+
+@pytest.fixture(scope="module")
+def torch_model_fp16(device):
     from zerotts_server.torch_runtime import TorchZeroTTS
 
     model = TorchZeroTTS(TORCH_DIR, device)
@@ -342,6 +356,46 @@ def test_nondefault_sampling_matches_onnx(torch_model, onnx_generator, sampling)
         assert np.array_equal(actual[0][:frame], reference[0][:frame])
 
 
+def test_fp16_tracks_fp32_under_teacher_forcing(torch_model, torch_model_fp16):
+    """The served fp16 model against fp32, both fed the fp32 codes: hidden and sampler logits
+    stay within FP16_RTOL of each tensor's scale. fp16 codes differ (different takes), so this
+    is what can be compared; quality is the ASR/listening A/B's job (#22)."""
+    import torch
+
+    K, C = torch_model.num_codebooks, torch_model.codebook_size
+    worst = {"hidden": 0.0, "ctrl_logits": 0.0, "audio_logits": 0.0}
+
+    def check(key, fp16, fp32):
+        fp16, fp32 = fp16.float(), fp32.float()
+        keep = fp32.abs() < 1e30  # a forbidden <eoa> is -FLT_MAX on both sides
+        assert torch.isfinite(fp16[keep]).all(), key
+        error = float((fp16 - fp32)[keep].abs().max() / fp32[keep].abs().max())
+        worst[key] = max(worst[key], error)
+
+    frames = 0
+    for i, text in enumerate(golden_texts()[::20]):
+        segment, emb = split_segments(text)[0], voice(VOICES[i % len(VOICES)])
+        [codes] = segment_codes(torch_model, [segment], emb, seed=i)
+        ids = torch_model.tokenizer(segment)
+        h32, h16 = torch_model.begin(ids, emb), torch_model_fp16.begin(ids, emb)
+        seen = torch.zeros(K, C, dtype=torch.bool, device=torch_model.device)
+        rng = np.random.default_rng(i)
+        for t, frame_codes in enumerate(codes):
+            check("hidden", h16, h32)
+            draws = draw_u(rng, K)
+            forced = torch.as_tensor(frame_codes, device=torch_model.device)
+            forbid = t < MIN_FRAMES
+            _, _, c32, a32 = torch_model.frame(h32, forbid, Sampling(), *draws, seen, forced)
+            _, _, c16, a16 = torch_model_fp16.frame(h16, forbid, Sampling(), *draws, seen, forced)
+            check("ctrl_logits", c16, c32)
+            check("audio_logits", a16, a32)
+            seen[torch_model.codebooks, forced] = True
+            h32, h16 = torch_model.advance(forced, t), torch_model_fp16.advance(forced, t)
+        frames += len(codes)
+    print(f"\nfp16 vs fp32: {frames} frames, max error / scale {worst}")
+    assert max(worst.values()) <= FP16_RTOL, worst
+
+
 def codec_metrics(actual: np.ndarray, reference: np.ndarray) -> tuple[float, float]:
     assert np.isfinite(actual).all(), "actual codec PCM must be finite"
     assert np.isfinite(reference).all(), "reference codec PCM must be finite"
@@ -366,7 +420,7 @@ def golden_codes(torch_model) -> list[list[np.ndarray]]:
 def torch_codec(torch_model):
     from zerotts_server.torch_runtime import TorchCodec
 
-    return TorchCodec(TORCH_DIR, torch_model.device)
+    return TorchCodec(TORCH_DIR, torch_model.device, torch_model.stream)
 
 
 @pytest.fixture(scope="module")
@@ -606,6 +660,31 @@ def test_caller_disconnect_frees_the_worker_and_resets_the_codec(client, stream_
     # codec state: same seed, same audio.
     _, pcm, _ = stream(client, "audio")
     assert pcm == stream_reference
+
+
+def test_two_workers_on_one_gpu_stream_the_single_worker_audio(device, stream_reference):
+    """N workers share the device, each with its own weights, buffers, stream and graphs:
+    concurrent streams must not disturb each other."""
+    settings = Settings(
+        model_dir=str(TORCH_DIR), runtime="torch-cuda", device=device, workers=2, busy_timeout=0
+    )
+    with TestClient(create_app(settings)) as client:
+        wait_until_ready(client)
+        results = [None, None]
+
+        def run(i):
+            body = {**STREAM_REQUEST, "stream_format": "audio"}
+            response = client.post(SPEECH, json=body)
+            results[i] = (response.status_code, response.content)
+
+        threads = [threading.Thread(target=run, args=(i,)) for i in range(2)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+
+    # Same seed, same audio as the single-worker server, whichever worker served each.
+    assert results == [(200, stream_reference), (200, stream_reference)]
 
 
 def test_missing_gpu_fails_load_instead_of_falling_back(device):

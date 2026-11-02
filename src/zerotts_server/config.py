@@ -62,7 +62,7 @@ class Settings:
     runtime: str = "onnx-cpu"
     # GPU for torch-cuda, "cuda" or "cuda:<index>"; unused by onnx-cpu.
     device: str = "cuda:0"
-    # onnxruntime intra-op threads per worker (onnx-cpu; the torch-cuda codec until #19).
+    # onnxruntime intra-op threads per worker (onnx-cpu only).
     threads: int = 8
     # Seconds a request waits for a free worker before it gets 503 server_busy.
     busy_timeout: float = 5.0

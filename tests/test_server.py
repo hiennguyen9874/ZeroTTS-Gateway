@@ -508,6 +508,7 @@ def test_torch_cuda_startup_logs_runtime_device_and_manifest(make_client, tmp_pa
         "runtime": "torch-cuda",
         "device": "cuda:1",
         "weights": "fp32",
+        "dtype": "float16",
         "format": "zerotts-torch",
         "source_revisions": {"model": "92ca8651", "codec": "6aa02b01", "assets": "c2bfbd67"},
         "sha256": {"zerotts.safetensors": "b" * 64, "codec.safetensors": "c" * 64},

@@ -19,6 +19,8 @@ from .config import RUNTIMES, Sampling
 
 # manifest.json "format" of a directory built by scripts/build_zerotts_torch.py.
 TORCH_FORMAT = "zerotts-torch"
+# torch-cuda compute precision (the weights stay fp32 on disk).
+TORCH_DTYPE = "float16"
 # zerotts 0.1.5's synthesize defaults.
 MIN_FRAMES = 4
 MAX_FRAMES = 1500
@@ -98,8 +100,9 @@ def load_runtime(model_dir: Path, runtime: str, device: str, threads: int):
     if runtime == "torch-cuda":
         from .torch_runtime import TorchCodec, TorchZeroTTS
 
-        generator = TorchZeroTTS(model_dir, device)
-        return generator, TorchCodec(model_dir, generator.device)
+        generator = TorchZeroTTS(model_dir, device, dtype=TORCH_DTYPE)
+        codec = TorchCodec(model_dir, generator.device, generator.stream, generator.cuda_graph)
+        return generator, codec
     raise ValueError(f"runtime must be one of {RUNTIMES}")
 
 
@@ -127,6 +130,7 @@ def weights_identity(model_dir: str | Path, runtime: str, device: str) -> dict:
             "runtime": runtime,
             "device": device,
             "weights": "fp32",
+            "dtype": TORCH_DTYPE,
             "format": TORCH_FORMAT,
             "source_revisions": {
                 name: source["revision"] for name, source in manifest["sources"].items()
