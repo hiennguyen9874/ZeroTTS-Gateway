@@ -53,6 +53,44 @@ one complete int8 directory. Evidence and reproduction:
 (engine level, one weights directory per process). Quality A/B (#14, ASR WER 0.074 for
 both; listening verdict pending): `docs/reports/issue14-zerotts-int8-quality-ab.md`.
 
+### torch-cuda weights (`models/ZeroTTS-torch`, host only)
+
+The `torch-cuda` runtime (ADR 0007, #15) uses its own self-contained directory, built on the
+host from pinned revisions:
+
+```bash
+uv run --group torch-weights python scripts/build_zerotts_torch.py \
+  --revision c2bfbd67dc648cac455077333f7cf5c18a2e3bb4
+```
+
+The script downloads `zeroweight-ai/ZeroTTS-GGUF` `92ca8651…` `gguf/zerotts-f32.gguf` and
+`OpenMOSS-Team/MOSS-Audio-Tokenizer-Nano` `6aa02b01…` `model-00001-of-00001.safetensors`
+with `hf_hub_download(local_dir=...)` (real files, no HF-cache symlinks) into a temporary
+directory, or into `--download-dir` for reuse, and rejects a SHA-256 that differs from the
+pinned one. `--model` (default `models/ZeroTTS`, the downloaded fp32 ONNX directory) supplies
+config, tokenizer, voices and `silence_frame.npy`; `--revision` is its HF commit, checked
+against HF metadata when present. Output defaults to `--dst models/ZeroTTS-torch`; existing
+output is refused unless `--force`, and the source is never touched. The `gguf`,
+`safetensors` and `onnx` packages live in the `torch-weights` dependency group only.
+
+| File | Content |
+| --- | --- |
+| `zerotts.safetensors` | All 377 GGUF tensors, fp32, GGUF names and value-equal. Header `__metadata__.gguf` holds the GGUF key-values (JSON), e.g. `d_ff`, `local_*`, eps, `rope_theta` |
+| `codec.safetensors` | Codec `decoder.*` and `quantizer.*` (246 tensors, encoder dropped), original names incl. weight-norm `parametrizations.weight.original0/1` |
+| `config.json`, `tokenizer.json`, `silence_frame.npy`, `voices/` | Copied from `--model` |
+| `onnx/codec/` | **Temporary**: ONNX codec so #18 runs before the PyTorch codec; #19 removes it |
+| `manifest.json` | See below |
+
+`manifest.json` has `format: "zerotts-torch"` (the weights-kind marker), `sources` (repo,
+revision, file, SHA-256, size for model and codec; repo and revision for the assets), `tools`
+(python, numpy, gguf, safetensors, onnx, huggingface_hub versions), `tensors` (count per
+safetensors), `codec_onnx_check` and `files` (SHA-256 and size of every other file). Before
+writing, the script re-reads both safetensors and checks every GGUF tensor is equal and every
+initializer of both codec ONNX graphs equals a codec tensor (direct, transposed or folded
+weight-norm, max abs diff ≤ 1e-6; 17 folded, 8.9e-8 observed). Two runs gave identical
+SHA-256 for every file: `docs/reports/issue17-zerotts-torch-weights.md`. The server cannot load
+this directory yet (#18).
+
 ## Workers and voices
 
 - Each worker holds its own model instance and runs one request at a time. With all busy, a request waits up to `busy_timeout`, then gets `503 server_busy` (before any stream starts). No retry; the gateway passes it through. A worker frees only when the engine stops: done, failed, or caller disconnect (after the audio piece in progress).
