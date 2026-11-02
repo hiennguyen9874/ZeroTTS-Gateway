@@ -862,6 +862,37 @@ def test_engine_failure_aborts_raw_audio_stream(live_server, engine):
     assert received == pcm16(CHUNKS[:1])
 
 
+@pytest.mark.parametrize("stream_format", ["sse", "audio"])
+def test_cuda_error_mid_stream_ends_the_stream_on_torch_cuda(
+    live_server, engine, tmp_path, stream_format
+):
+    # torch.OutOfMemoryError and other CUDA errors are RuntimeErrors.
+    engine.error, engine.fail_after = RuntimeError("CUDA error: out of memory"), 1
+    base = live_server(model_dir=torch_weights(tmp_path), runtime="torch-cuda")
+    body = stream_body(stream_format=stream_format)
+
+    if stream_format == "sse":
+        response = httpx.post(base + SPEECH, json=body, timeout=5)
+        assert response.status_code == 200
+        events = sse_events(response.content)
+        assert [e["type"] for e in events] == ["speech.audio.delta", "error"]
+        assert events[-1]["error"] == {"message": "synthesis failed", "type": "server_error"}
+    else:
+        received = b""
+        with (
+            pytest.raises(httpx.RemoteProtocolError),
+            httpx.stream("POST", base + SPEECH, json=body, timeout=5) as response,
+        ):
+            assert response.status_code == 200
+            for chunk in response.iter_raw():
+                received += chunk
+        assert received == pcm16(CHUNKS[:1])
+
+    assert engine.closed.is_set()
+    engine.error = None
+    assert httpx.post(base + SPEECH, json=body, timeout=5).status_code == 200
+
+
 def test_caller_disconnect_stops_the_engine(live_server, engine):
     engine.chunks, engine.delay = [np.zeros(480, dtype=np.float32)] * 100, 0.05  # about 5 s
     base = live_server()

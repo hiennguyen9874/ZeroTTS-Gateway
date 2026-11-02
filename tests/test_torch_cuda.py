@@ -10,22 +10,27 @@ ONNX weights in models/ZeroTTS. Run on a free GPU, e.g.:
 ZEROTTS_SERVER_DEVICE picks the device (default cuda:0).
 """
 
+import base64
 import hashlib
 import io
 import json
 import os
+import socket
+import threading
 import time
 import wave
 from importlib.util import find_spec
 from pathlib import Path
 
+import httpx
 import numpy as np
 import pytest
 from fastapi.testclient import TestClient
 
 from zerotts_server import create_app
-from zerotts_server.app import split_segments
+from zerotts_server.app import pcm16, split_segments
 from zerotts_server.config import Sampling, Settings
+from zerotts_server.engine import STREAM_GAP_FRAMES, STREAM_MAX_CHUNK_FRAMES, ZeroTTSEngine
 from zerotts_server.model.voices import load_voice_dir
 from zerotts_server.runtime import EOA_EXTRA_FRAMES, MAX_FRAMES, MIN_FRAMES, draw_u
 
@@ -41,6 +46,12 @@ RTOL = 1e-5
 # PyTorch fp32 codec against ONNX offline on the same codes, audio peaks near 1.
 CODEC_ATOL = 1e-4
 CODEC_MIN_SNR_DB = 80
+# Three segments (the golden set has only single-segment cases), so streaming crosses two
+# segment boundaries with codec silence frames between them.
+LONG_TEXT = " ".join(
+    f"Đây là câu số {i}, kể về một ngày làm việc dài ở văn phòng." for i in range(7)
+)
+SPEECH = "/v1/audio/speech"
 
 pytestmark = [
     pytest.mark.cuda,
@@ -342,28 +353,101 @@ def codec_metrics(actual: np.ndarray, reference: np.ndarray) -> tuple[float, flo
     return float(np.abs(error).max()), float(snr)
 
 
-@needs_onnx
-def test_codec_matches_onnx_offline(torch_model):
-    """PyTorch fp32 codec against the ONNX codec offline, on the golden set's codes."""
-    from zerotts_server.model.codec import MossCodecDecoder
+@pytest.fixture(scope="module")
+def golden_codes(torch_model) -> list[list[np.ndarray]]:
+    """torch-cuda codes of every golden case's segments: case i uses seed i, alternating voices."""
+    return [
+        segment_codes(torch_model, split_segments(text), voice(VOICES[i % len(VOICES)]), seed=i)
+        for i, text in enumerate(golden_texts())
+    ]
+
+
+@pytest.fixture(scope="module")
+def torch_codec(torch_model):
     from zerotts_server.torch_runtime import TorchCodec
 
-    codec = TorchCodec(TORCH_DIR, torch_model.device)
-    reference = MossCodecDecoder(ONNX_DIR / "onnx" / "codec", intra_op_num_threads=8)
+    return TorchCodec(TORCH_DIR, torch_model.device)
+
+
+@pytest.fixture(scope="module")
+def onnx_codec():
+    from zerotts_server.model.codec import MossCodecDecoder
+
+    return MossCodecDecoder(ONNX_DIR / "onnx" / "codec", intra_op_num_threads=8)
+
+
+@needs_onnx
+def test_codec_matches_onnx_offline(golden_codes, torch_codec, onnx_codec):
+    """PyTorch fp32 codec against the ONNX codec offline, on the golden set's codes."""
     worst_diff, worst_snr, frames = 0.0, np.inf, 0
-    texts = golden_texts()
-    for i, text in enumerate(texts):
-        emb = voice(VOICES[i % len(VOICES)])
-        for codes in segment_codes(torch_model, split_segments(text), emb, seed=i):
+    for case in golden_codes:
+        for codes in case:
             codes = codes.T[None]  # (T, K) -> (1, K, T), as the engine decodes
-            ours, theirs = codec.decode(codes), reference.decode(codes)
+            ours, theirs = torch_codec.decode(codes), onnx_codec.decode(codes)
             assert ours.dtype == np.float32
             assert ours.shape == theirs.shape == (1, codes.shape[2] * 3840)
             difference, snr = codec_metrics(ours, theirs)
             worst_diff, worst_snr = max(worst_diff, difference), min(worst_snr, snr)
             frames += codes.shape[2]
     print(
-        f"\ncodec parity: {len(texts)} cases, {frames} frames, "
+        f"\ncodec parity: {len(golden_codes)} cases, {frames} frames, "
+        f"max abs diff {worst_diff:.2e}, min SNR {worst_snr:.1f} dB"
+    )
+    assert worst_diff <= CODEC_ATOL
+    assert worst_snr >= CODEC_MIN_SNR_DB
+
+
+def stream_chunks(segments: list[np.ndarray], silence: np.ndarray) -> list[np.ndarray]:
+    """The (1, K, n) codec calls ZeroTTSEngine._stream makes for these segments' (T, K) codes.
+
+    The first segment ramps 1, 2, 4 ... frames up to the cap, later ones decode at the cap;
+    STREAM_GAP_FRAMES codec silence frames go between segments.
+    """
+    chunks = []
+    for i, codes in enumerate(segments):
+        if i:
+            chunks.append(np.stack([silence] * STREAM_GAP_FRAMES, axis=-1))
+        size, start = (1 if i == 0 else STREAM_MAX_CHUNK_FRAMES), 0
+        while start < len(codes):
+            chunks.append(codes[start : start + size].T[None])
+            start += size
+            size = min(STREAM_MAX_CHUNK_FRAMES, size * 2)
+    return chunks
+
+
+def stream_decode(codec, chunks: list[np.ndarray]) -> list[np.ndarray]:
+    """One streaming decoder across all chunks of a request, as the engine uses it."""
+    decoder = codec.streaming_decoder()
+    try:
+        return [decoder.decode_chunk(chunk) for chunk in chunks]
+    finally:
+        decoder.close()
+
+
+@needs_onnx
+def test_codec_matches_onnx_streaming(torch_model, golden_codes, torch_codec, onnx_codec):
+    """Joined streaming PCM of the PyTorch codec against ONNX streaming on the same codes.
+
+    Golden set plus a three-segment text, decoded with the engine's schedule and silence
+    frames; the second pass of each case checks close() reset the causal state.
+    """
+    silence = np.load(TORCH_DIR / "silence_frame.npy")
+    long_case = segment_codes(torch_model, split_segments(LONG_TEXT), voice("maichi"), seed=7)
+    assert len(long_case) == 3
+    worst_diff, worst_snr, chunk_count = 0.0, np.inf, 0
+    for case in [*golden_codes, long_case]:
+        chunks = stream_chunks(case, silence)
+        ours, theirs = stream_decode(torch_codec, chunks), stream_decode(onnx_codec, chunks)
+        expected_shapes = [(1, chunk.shape[2] * 3840) for chunk in chunks]
+        assert [c.shape for c in ours] == [c.shape for c in theirs] == expected_shapes
+        assert all(c.dtype == np.float32 for c in ours)
+        difference, snr = codec_metrics(np.concatenate(ours, axis=1), np.concatenate(theirs, 1))
+        worst_diff, worst_snr = max(worst_diff, difference), min(worst_snr, snr)
+        chunk_count += len(chunks)
+    again = np.concatenate(stream_decode(torch_codec, stream_chunks(long_case, silence)), axis=1)
+    assert np.array_equal(again, np.concatenate(ours, axis=1))
+    print(
+        f"\nstreaming codec parity: {len(golden_codes) + 1} cases, {chunk_count} chunks, "
         f"max abs diff {worst_diff:.2e}, min SNR {worst_snr:.1f} dB"
     )
     assert worst_diff <= CODEC_ATOL
@@ -389,28 +473,54 @@ def test_weights_have_no_onnx_and_match_manifest():
 # --- HTTP smoke on torch-cuda ---------------------------------------------------
 
 
+def wait_until_ready(client, timeout: float = 300) -> None:
+    """Poll /health, one request per round, until 200; only model_loading may come before."""
+    deadline = time.monotonic() + timeout
+    while (response := client.get("/health")).status_code != 200:
+        assert response.json()["error"]["type"] == "model_loading"
+        assert time.monotonic() < deadline, "model did not load"
+        time.sleep(0.5)
+
+
 @pytest.fixture(scope="module")
-def client(device):
+def torch_engine(device):
+    """The server's only worker; tests also call it directly for the reference audio."""
+    return ZeroTTSEngine(TORCH_DIR, TORCH_DIR / "voices", 8, "torch-cuda", device)
+
+
+@pytest.fixture(scope="module")
+def client(torch_engine, device):
+    """The torch-cuda server over real HTTP: TestClient buffers whole streamed bodies."""
     import onnxruntime
+    import uvicorn
 
     def no_onnx(*args, **kwargs):
         raise AssertionError("torch-cuda must not open an ONNX session")
 
     settings = Settings(model_dir=str(TORCH_DIR), runtime="torch-cuda", device=device)
+    sock = socket.socket()
+    sock.bind(("127.0.0.1", 0))
+    app = create_app(settings, engine=torch_engine)
+    server = uvicorn.Server(uvicorn.Config(app, log_config=None))
     # Sessions are opened at load; any ONNX one would fail it, so /health never gets 200.
     patch = pytest.MonkeyPatch()
     patch.setattr(onnxruntime, "InferenceSession", no_onnx)
+    thread = threading.Thread(target=server.run, kwargs={"sockets": [sock]}, daemon=True)
+    thread.start()
     try:
-        with TestClient(create_app(settings)) as client:
-            deadline = time.monotonic() + 300
-            while (response := client.get("/health")).status_code != 200:
-                assert response.json()["error"]["type"] == "model_loading"
-                assert time.monotonic() < deadline, "model did not load"
-                time.sleep(0.5)
+        base = f"http://127.0.0.1:{sock.getsockname()[1]}"
+        with httpx.Client(base_url=base, timeout=300) as client:
+            deadline = time.monotonic() + 60
+            while not server.started:
+                assert time.monotonic() < deadline, "server did not start"
+                time.sleep(0.1)
+            wait_until_ready(client)
             patch.undo()
             yield client
     finally:
         patch.undo()
+        server.should_exit = True
+        thread.join(10)
 
 
 def speak(client, **extra) -> bytes:
@@ -438,15 +548,64 @@ def test_same_seed_reproduces_audio_on_torch_cuda(client):
     assert speak(client, seed=4321) != first
 
 
-def test_streaming_speech_ends_with_done(client):
-    body = {"model": "zerotts-stream", "input": "Xin chào. Hẹn gặp lại.", "stream": True}
-    response = client.post("/v1/audio/speech", json=body)
+STREAM_REQUEST = {"model": "zerotts-stream", "input": LONG_TEXT, "voice": "maichi", "seed": 7}
 
-    assert response.status_code == 200
-    events = [line[6:] for line in response.text.split("\n") if line.startswith("data: ")]
-    assert events[-1] == "[DONE]"
-    assert json.loads(events[-2])["type"] == "speech.audio.done"
-    assert sum(json.loads(e)["type"] == "speech.audio.delta" for e in events[:-2]) > 1
+
+@pytest.fixture(scope="module")
+def stream_reference(client, torch_engine) -> bytes:
+    """The engine's own streamed audio for STREAM_REQUEST, as 16-bit PCM."""
+    segments = split_segments(LONG_TEXT)
+    assert len(segments) == 3
+    chunks = torch_engine.synthesize(segments, "maichi", 7, Sampling(), stream=True)
+    return b"".join(pcm16(chunk) for chunk in chunks)
+
+
+def stream(client, stream_format: str) -> tuple[httpx.Response, bytes, float]:
+    """POST STREAM_REQUEST; returns the response, its body and the client-side TTFA in ms."""
+    body = {**STREAM_REQUEST, "stream_format": stream_format}
+    start, first_ms, data = time.perf_counter(), None, b""
+    with client.stream("POST", SPEECH, json=body) as response:
+        assert response.status_code == 200, response.read()
+        for chunk in response.iter_raw():
+            if first_ms is None:
+                first_ms = (time.perf_counter() - start) * 1000
+            data += chunk
+    return response, data, first_ms
+
+
+def test_stream_deltas_join_to_the_engine_audio(client, stream_reference):
+    sse, sse_body, sse_first_ms = stream(client, "sse")
+    raw, pcm, raw_first_ms = stream(client, "audio")
+
+    assert sse.headers["content-type"].startswith("text/event-stream")
+    assert sse_body.endswith(b"data: [DONE]\n\n")
+    blocks = sse_body.decode().split("\n\n")[:-2]
+    events = [json.loads(block.removeprefix("data: ")) for block in blocks]
+    deltas, done = events[:-1], events[-1]
+    assert [e["type"] for e in deltas] == ["speech.audio.delta"] * len(deltas)
+    assert done["type"] == "speech.audio.done"
+    assert len(deltas) > 5  # 1, 2, 4, 8, 16 ... frames, then later segments
+    assert b"".join(base64.b64decode(e["audio"]) for e in deltas) == stream_reference
+    assert raw.headers["content-type"] == "audio/pcm"
+    assert pcm == stream_reference
+    audio_s = len(stream_reference) / 2 / 48000
+    print(
+        f"\nstream: {audio_s:.1f} s audio, server ttft_ms={done['timing']['ttft_ms']}, "
+        f"client first delta {sse_first_ms:.0f} ms (sse), first bytes {raw_first_ms:.0f} ms (pcm)"
+    )
+    assert audio_s > 15
+
+
+def test_caller_disconnect_frees_the_worker_and_resets_the_codec(client, stream_reference):
+    body = {**STREAM_REQUEST, "stream_format": "audio"}
+    with client.stream("POST", SPEECH, json=body) as response:
+        assert response.status_code == 200
+        next(response.iter_raw())
+
+    # Within busy_timeout the worker is free again, and the next stream starts from a fresh
+    # codec state: same seed, same audio.
+    _, pcm, _ = stream(client, "audio")
+    assert pcm == stream_reference
 
 
 def test_missing_gpu_fails_load_instead_of_falling_back(device):

@@ -3,8 +3,6 @@
 These test the acceptance check itself; HTTP cannot expose false positives in that check.
 """
 
-from contextlib import nullcontext
-
 import httpx
 import numpy as np
 import pytest
@@ -62,7 +60,7 @@ def test_codec_metrics_reject_noise_against_silence():
     assert snr == -np.inf
 
 
-def test_smoke_fixture_accepts_loading_followed_by_ready(monkeypatch):
+def test_smoke_readiness_accepts_loading_followed_by_ready(monkeypatch):
     responses = iter(
         [
             httpx.Response(503, json={"error": {"type": "model_loading"}}),
@@ -75,11 +73,7 @@ def test_smoke_fixture_accepts_loading_followed_by_ready(monkeypatch):
             assert path == "/health"
             return next(responses)
 
-    client = LoadingClient()
-    monkeypatch.setattr(test_torch_cuda, "TestClient", lambda app: nullcontext(client))
     monkeypatch.setattr(test_torch_cuda.time, "sleep", lambda seconds: None)
 
-    fixture = test_torch_cuda.client.__wrapped__("cuda:0")
-    assert next(fixture) is client
-    with pytest.raises(StopIteration):
-        next(fixture)
+    test_torch_cuda.wait_until_ready(LoadingClient())
+    assert next(responses, None) is None
