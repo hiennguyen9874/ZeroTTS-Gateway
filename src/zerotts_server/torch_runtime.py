@@ -3,7 +3,9 @@
 A port of the ggml runtime in references/ZeroTTS-repo/cpp/src/zerotts.cpp, which reproduces the
 ONNX frame codes, reading models/ZeroTTS-torch/zerotts.safetensors (the GGUF f32 tensors under
 their GGUF names). This slice runs eager fp32; the sampler mirrors local_frame_decode.onnx op for
-op so that equal random draws give equal codes.
+op so that equal random draws give equal codes. The codec is the vendored PyTorch
+MOSS-Audio-Tokenizer-Nano (model/moss) on the same GPU, reading codec.safetensors and
+codec_config.json.
 
 Layout: weights are (out, in) as nn.Linear stores them. The global decoder's self-attention KV
 cache is preallocated for the voice block, <soa> and MAX_FRAMES frames and written by position:
@@ -12,6 +14,7 @@ projected once per segment. The local (depth) transformer has no RoPE and a 17-s
 """
 
 import json
+from contextlib import ExitStack
 from pathlib import Path
 
 import numpy as np
@@ -334,3 +337,63 @@ class TorchZeroTTS:
         _, codes, _, _ = self.frame(h, True, sampling, *draws, seen)
         self.advance(codes, 0)
         torch.cuda.synchronize(self.device)
+
+
+class TorchCodec:
+    """The codec on one GPU, fp32: (B, K, T) codes -> (B, T_audio) float32 mono at 48 kHz.
+
+    Same interface as model.codec.MossCodecDecoder (the ONNX codec): `decode` and
+    `streaming_decoder`. Built from the vendored modeling code and local files only; no
+    transformers `from_pretrained`, no remote code, no download.
+    """
+
+    def __init__(self, model_dir: str | Path, device: torch.device):
+        from zerotts_server.model.moss.configuration_moss_audio_tokenizer import (
+            MossAudioTokenizerConfig,
+        )
+        from zerotts_server.model.moss.modeling_moss_audio_tokenizer import (
+            MossAudioTokenizerModel,
+        )
+
+        model_dir = Path(model_dir)
+        # cuDNN runs fp32 convolutions as TF32 by default, which moves the PCM by ~1e-3.
+        torch.backends.cudnn.allow_tf32 = False
+        config = json.loads((model_dir / "codec_config.json").read_text())
+        model = MossAudioTokenizerModel(MossAudioTokenizerConfig(**config))
+        model.encoder = torch.nn.ModuleList()  # decode only; codec.safetensors has no encoder
+        model.load_state_dict(load_file(model_dir / "codec.safetensors"), strict=True)
+        self.model = model.eval().to(device)
+        self.device = device
+        self.num_codebooks = int(config["quantizer_kwargs"]["num_quantizers"])
+        # Load-time CUDA setup, and fail at load rather than on the first request.
+        self.decode(np.zeros((1, self.num_codebooks, 1), dtype=np.int64))
+        torch.cuda.synchronize(device)
+
+    @torch.no_grad()
+    def decode(self, codes_bkt: np.ndarray) -> np.ndarray:
+        codes = torch.as_tensor(np.asarray(codes_bkt, dtype=np.int64), device=self.device)
+        if codes.ndim == 2:  # (K, T) -> (1, K, T)
+            codes = codes[None]
+        # What the model's decode() and chunked batch_decode() call; it takes (K, B, T).
+        out = self.model._decode_frame(codes.transpose(0, 1))
+        n = int(out.audio_lengths[0])
+        # The codec is stereo; mono is the channel mean, as the ONNX codec.
+        return out.audio[:, :, :n].mean(dim=1).cpu().numpy()
+
+    def streaming_decoder(self) -> "TorchStreamingDecoder":
+        return TorchStreamingDecoder(self)
+
+
+class TorchStreamingDecoder:
+    """Decodes chunks with the codec's causal state kept across them; close() resets it."""
+
+    def __init__(self, codec: TorchCodec):
+        self._codec = codec
+        self._stack = ExitStack()
+        self._stack.enter_context(codec.model.streaming(batch_size=1))
+
+    def decode_chunk(self, codes_bkt: np.ndarray) -> np.ndarray:
+        return self._codec.decode(codes_bkt)
+
+    def close(self) -> None:
+        self._stack.close()

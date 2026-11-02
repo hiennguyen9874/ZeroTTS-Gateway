@@ -3,8 +3,8 @@
 
 Run on the host: uv run --group torch-weights python scripts/build_zerotts_torch.py
     --revision <HF commit of --model>
-Downloads two pinned files from the Hub (real files, no HF-cache symlinks), checks their
-SHA-256, converts them to safetensors and verifies every tensor before writing --dst.
+Downloads three pinned files from the Hub (real files, no HF-cache symlinks), checks their
+SHA-256, converts the weights to safetensors and verifies every tensor before writing --dst.
 """
 
 import argparse
@@ -35,6 +35,12 @@ CODEC_SOURCE = {
     "revision": "6aa02b01e445cc585582cf0ba480bc3ea6c8dd68",
     "file": "model-00001-of-00001.safetensors",
     "sha256": "34d9880d805eecb21bde975202b1c256dbd0eb98c8680b9d3aeffd2bc6ac2f67",
+}
+# The codec architecture the PyTorch codec is built from, copied as codec_config.json.
+CODEC_CONFIG_SOURCE = {
+    **CODEC_SOURCE,
+    "file": "config.json",
+    "sha256": "b38892f8ba00efc18af2ad9eca999c7603f871548c2e7f99258cb1cefc70ee06",
 }
 ASSETS_REPO = "zeroweight-ai/ZeroTTS"
 CODEC_PREFIXES = ("decoder.", "quantizer.")  # the encoder is dropped
@@ -193,19 +199,20 @@ def main() -> None:
         output.mkdir()
         gguf_path = download(MODEL_SOURCE, downloads)
         codec_src = download(CODEC_SOURCE, downloads)
+        codec_config = download(CODEC_CONFIG_SOURCE, downloads)
 
         for name in ("config.json", "tokenizer.json", "silence_frame.npy"):
             shutil.copy2(src / name, output / name)
         ignore = shutil.ignore_patterns(".cache", ".git")
         shutil.copytree(src / "voices", output / "voices", ignore=ignore)
-        # Temporary (#17): the ONNX codec until the PyTorch codec lands (#19 removes it).
-        shutil.copytree(src / "onnx" / "codec", output / "onnx" / "codec", ignore=ignore)
+        shutil.copy2(codec_config, output / "codec_config.json")
 
         counts = {
             "zerotts.safetensors": convert_model(gguf_path, output / "zerotts.safetensors"),
             "codec.safetensors": convert_codec(codec_src, output / "codec.safetensors"),
         }
-        codec_check = verify_codec_onnx(output / "codec.safetensors", output / "onnx" / "codec")
+        # The source's ONNX codec is only the reference here; the output has no ONNX.
+        codec_check = verify_codec_onnx(output / "codec.safetensors", src / "onnx" / "codec")
 
         files = {
             path.relative_to(output).as_posix(): {
@@ -220,6 +227,7 @@ def main() -> None:
             "sources": {
                 "model": {**MODEL_SOURCE, "size": gguf_path.stat().st_size},
                 "codec": {**CODEC_SOURCE, "size": codec_src.stat().st_size},
+                "codec_config": {**CODEC_CONFIG_SOURCE, "size": codec_config.stat().st_size},
                 "assets": {"repo": ASSETS_REPO, "revision": args.revision},
             },
             "tools": {

@@ -14,7 +14,7 @@ The server listens at once and loads plus warms up the model in the background; 
 `runtime` (`ZEROTTS_SERVER_RUNTIME`) and `device` (`ZEROTTS_SERVER_DEVICE`) are server-level; callers see no difference and `/v1/models` is unchanged.
 
 - `onnx-cpu` (default): the vendored ONNX graphs on onnxruntime CPU; `threads` per worker. Audio is byte-identical to before the seam (the #16 SHA-256 tests pass).
-- `torch-cuda`: `TorchZeroTTS` in `torch_runtime.py`, a PyTorch port of `references/ZeroTTS-repo/cpp/src/zerotts.cpp` reading `models/ZeroTTS-torch`. This slice (#18) is eager fp32, with a preallocated global KV cache written by position. The codec is **temporarily ONNX CPU** (`onnx/codec/`, `threads`) until #19. Offline and streaming both work. Install with `uv sync --extra server-cuda` (torch 2.14.1+cu126 from the PyTorch index, `safetensors`); the default dev sync and the CPU image have no torch.
+- `torch-cuda`: `TorchZeroTTS` in `torch_runtime.py`, a PyTorch port of `references/ZeroTTS-repo/cpp/src/zerotts.cpp` reading `models/ZeroTTS-torch`. Eager fp32 (#18), with a preallocated global KV cache written by position. The codec is `TorchCodec` (#19): the vendored PyTorch MOSS-Audio-Tokenizer-Nano (`model/moss/`, verbatim from `6aa02b01`, Apache-2.0) built from `codec_config.json` and `codec.safetensors`, encoder removed, fp32 on the same GPU with cuDNN TF32 turned off (TF32 moved the PCM by ~1e-3). It is never loaded with `from_pretrained`/`trust_remote_code` and the runtime opens no ONNX session; `threads` is unused. Offline and streaming both work (streaming keeps the codec's causal state in its `streaming()` context across chunks; streaming parity is #20). Install with `uv sync --extra server-cuda` (torch 2.14.1+cu126 from the PyTorch index, `safetensors`, `transformers` 5.22.1 which the vendored codec still imports); the default dev sync and the CPU image have no torch.
 - Seam: `runtime.FrameGenerator.frames(text, voice_emb, sampling, rng)` yields (1, K) int64 codes per frame; `ZeroTTSEngine` joins it with a codec (offline `decode`, or one `streaming_decoder` across segments). Both runtimes draw the sampler's random numbers with `runtime.draw_u` from the per-request numpy RNG in the same order (control, then K codebooks, per frame). The torch sampler mirrors `local_frame_decode.onnx` op for op: stable full sort, rank ≥ k → -inf, softmax, drop ranks whose preceding mass > top-p, softmax again, first CDF > u. A forbidden `<eoa>` is -FLT_MAX.
 - **No fallback to CPU.** Startup fails with `model_load_failed` (`/health` 503) when: the weights directory does not match the runtime (`manifest.json` `format: "zerotts-torch"` ↔ `torch-cuda`; anything else ↔ `onnx-cpu`); any model has `cfg_scale` ≠ 1 under `torch-cuda`; torch is missing, CUDA is unavailable, the device index does not exist, or loading N workers runs out of VRAM. Each worker loads its own weights and caches on `device`. A `device` that is not `cuda`/`cuda:<n>`, or an unknown `runtime`, is a config error at startup. A CUDA error mid-request is an engine error (500, SSE `error`, truncated PCM).
 - Seed: same seed, runtime and weights → same audio. `torch-cuda` and `onnx-cpu` give different audio for the same seed: equal draws give equal codes except at fp32 near-ties, after which the takes diverge, and the codec paths differ.
@@ -74,7 +74,7 @@ uv run --group torch-weights python scripts/build_zerotts_torch.py \
 ```
 
 The script downloads `zeroweight-ai/ZeroTTS-GGUF` `92ca8651…` `gguf/zerotts-f32.gguf` and
-`OpenMOSS-Team/MOSS-Audio-Tokenizer-Nano` `6aa02b01…` `model-00001-of-00001.safetensors`
+`OpenMOSS-Team/MOSS-Audio-Tokenizer-Nano` `6aa02b01…` `model-00001-of-00001.safetensors` and `config.json`
 with `hf_hub_download(local_dir=...)` (real files, no HF-cache symlinks) into a temporary
 directory, or into `--download-dir` for reuse, and rejects a SHA-256 that differs from the
 pinned one. The download directory must not be the source or output directory, or inside
@@ -89,21 +89,23 @@ output is refused unless `--force`, and the source is never touched. The `gguf`,
 | --- | --- |
 | `zerotts.safetensors` | All 377 GGUF tensors, fp32, GGUF names and value-equal. Header `__metadata__.gguf` holds the GGUF key-values (JSON), e.g. `d_ff`, `local_*`, eps, `rope_theta` |
 | `codec.safetensors` | Codec `decoder.*` and `quantizer.*` (246 tensors, encoder dropped), original names incl. weight-norm `parametrizations.weight.original0/1` |
+| `codec_config.json` | The MOSS `config.json` at `6aa02b01` (codec architecture) |
 | `config.json`, `tokenizer.json`, `silence_frame.npy`, `voices/` | Copied from `--model` |
-| `onnx/codec/` | **Temporary**: ONNX codec so #18 runs before the PyTorch codec; #19 removes it |
+
+No ONNX file is copied: the directory has no codec ONNX (#19).
 | `manifest.json` | See below |
 
 `manifest.json` has `format: "zerotts-torch"` (the weights-kind marker), `sources` (repo,
-revision, file, SHA-256, size for model and codec; repo and revision for the assets), `tools`
+revision, file, SHA-256, size for `model`, `codec` and `codec_config`; repo and revision for the assets), `tools`
 (python, numpy, gguf, safetensors, onnx, huggingface_hub versions), `tensors` (count per
 safetensors), `codec_onnx_check` and `files` (SHA-256 and size of every other file). Before
 writing, the script re-reads both safetensors and checks every GGUF tensor is equal and every
-initializer of both codec ONNX graphs equals a codec tensor (direct, transposed or folded
+initializer of both codec ONNX graphs of `--model` (the reference only) equals a codec tensor (direct, transposed or folded
 weight-norm, max abs diff ≤ 1e-6; 17 folded, 8.9e-8 observed). Two runs gave identical
 SHA-256 for every file: `docs/reports/issue17-zerotts-torch-weights.md`. Serve it with
 `ZEROTTS_SERVER_RUNTIME=torch-cuda ZEROTTS_SERVER_MODEL_DIR=models/ZeroTTS-torch`; the startup
 `weights` record then has `runtime`, `device`, `weights: fp32`, `format`, `source_revisions`
-(model, codec, assets), `sha256` of both safetensors (from the manifest) and the `torch` version.
+(model, codec, codec_config, assets), `sha256` of both safetensors (from the manifest) and the `torch` version.
 `onnx-cpu` records carry `runtime: onnx-cpu` and `device: cpu`.
 
 ## Workers and voices
@@ -155,7 +157,7 @@ CUDA_VISIBLE_DEVICES=2 uv run python -m pytest -m cuda tests/test_torch_cuda.py 
 uv sync   # back to the default environment
 ```
 
-The parity test runs the golden set (non-error cases of `tests/golden/pipeline.json`) through both runtimes with the same voice and seed: lockstep with torch teacher-forced to the ONNX codes (`frame(..., forced=...)`, as `zerotts_frame_forced`) compares hidden and logits within 1e-4 + 1e-5·max|ref| and allows a different pick only at a near-tie; free-running `frames()` must equal ONNX up to the first near-tie. About 11 minutes on an A100 plus CPU. Results: `docs/reports/issue18-torch-cuda-eager.md`. The HTTP smoke tests cover WAV 48 kHz mono, seed reproducibility, streaming and `cuda:99` → `model_load_failed`. A near-tie exemption must replay both actual picks from the two runtimes' logits within the stated tolerance, not merely find a nearby boundary. Additional CUDA cases cover nondefault sampling, including fractional top-k values coerced to integers as ONNX does. `tests/test_torch_cuda_validation.py` checks the acceptance helper and readiness polling on CPU.
+The parity test runs the golden set (non-error cases of `tests/golden/pipeline.json`) through both runtimes with the same voice and seed: lockstep with torch teacher-forced to the ONNX codes (`frame(..., forced=...)`, as `zerotts_frame_forced`) compares hidden and logits within 1e-4 + 1e-5·max|ref| and allows a different pick only at a near-tie; free-running `frames()` must equal ONNX up to the first near-tie. About 11 minutes on an A100 plus CPU. Results: `docs/reports/issue18-torch-cuda-eager.md`. The codec parity test decodes the golden set's torch codes with `TorchCodec` and the ONNX codec offline: max abs diff ≤ 1e-4 and SNR ≥ 80 dB (observed 1.3e-5, 112.5 dB; `docs/reports/issue19-torch-codec.md`). Another case checks `models/ZeroTTS-torch` has no ONNX file and matches `manifest.json` (names, SHA-256, sizes). The HTTP smoke tests load with `onnxruntime.InferenceSession` made to fail (so no ONNX session can open), then cover WAV 48 kHz mono, seed reproducibility, streaming and `cuda:99` → `model_load_failed`. A near-tie exemption must replay both actual picks from the two runtimes' logits within the stated tolerance, not merely find a nearby boundary. Additional CUDA cases cover nondefault sampling, including fractional top-k values coerced to integers as ONNX does. `tests/test_torch_cuda_validation.py` checks the acceptance helper and readiness polling on CPU.
 
 ## Vendored model code
 

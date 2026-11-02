@@ -28,6 +28,7 @@ server-cuda = [
     "zerotts-gateway[server]",
     "safetensors==0.8.0",
     "torch==2.14.1",
+    "transformers==5.22.1",
 ]
 
 [project.scripts]
@@ -83,7 +84,8 @@ dev = [
 [tool.ruff]
 line-length = 100
 target-version = "py312"
-extend-exclude = ["references", "models", "voices_candidates", ".pi"]
+# model/moss is third-party code kept verbatim (model/moss/VENDORED.md).
+extend-exclude = ["references", "models", "voices_candidates", ".pi", "src/zerotts_server/model/moss"]
 
 [tool.ruff.format]
 # Scope is Python code; leave code blocks in docs as written.

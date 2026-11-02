@@ -24,7 +24,7 @@ model_dir = "../models/ZeroTTS"
 # request at a time.
 workers = 1
 # onnxruntime intra-op threads per worker; workers × threads should not exceed the CPU cores.
-# onnx-cpu only, except that torch-cuda's codec still runs on ONNX CPU with these threads (#19).
+# onnx-cpu only.
 threads = 8
 # Seconds a request waits for a free worker before it gets 503 server_busy; 0 means no wait.
 busy_timeout = 5.0

@@ -96,14 +96,10 @@ def load_runtime(model_dir: Path, runtime: str, device: str, threads: int):
         generator = OnnxFrameGenerator(model_dir, threads)
         return generator, generator.tts.codec
     if runtime == "torch-cuda":
-        from zerotts_server.model.codec import MossCodecDecoder
-
-        from .torch_runtime import TorchZeroTTS
+        from .torch_runtime import TorchCodec, TorchZeroTTS
 
         generator = TorchZeroTTS(model_dir, device)
-        # Temporary (#19 replaces it with the PyTorch codec): the ONNX codec on CPU.
-        codec = MossCodecDecoder(model_dir / "onnx" / "codec", intra_op_num_threads=threads)
-        return generator, codec
+        return generator, TorchCodec(model_dir, generator.device)
     raise ValueError(f"runtime must be one of {RUNTIMES}")
 
 

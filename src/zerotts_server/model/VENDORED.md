@@ -12,3 +12,6 @@ The local-only config validation formerly in `hub.py` is in `synthesizer.py`;
 Hub downloading and `from_pretrained` were removed. The copied files are
 formatted and linted for this repository. Compare against the pinned submodule
 with `git diff --no-index references/ZeroTTS-repo/src/zerotts/synthesizer.py src/zerotts_server/model/synthesizer.py` (and likewise for the other files).
+
+`moss/` is a separate vendored component, the PyTorch MOSS-Audio-Tokenizer-Nano
+codec (Apache-2.0); see `moss/VENDORED.md`.

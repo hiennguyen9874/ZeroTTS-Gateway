@@ -10,6 +10,7 @@ ONNX weights in models/ZeroTTS. Run on a free GPU, e.g.:
 ZEROTTS_SERVER_DEVICE picks the device (default cuda:0).
 """
 
+import hashlib
 import io
 import json
 import os
@@ -37,6 +38,9 @@ VOICES = ("maichi", "quangminh")
 # where one fp32 ulp is ~1.5e-5. Observed maxima are printed (run with -s).
 ATOL = 1e-4
 RTOL = 1e-5
+# PyTorch fp32 codec against ONNX offline on the same codes, audio peaks near 1.
+CODEC_ATOL = 1e-4
+CODEC_MIN_SNR_DB = 80
 
 pytestmark = [
     pytest.mark.cuda,
@@ -327,19 +331,76 @@ def test_nondefault_sampling_matches_onnx(torch_model, onnx_generator, sampling)
         assert np.array_equal(actual[0][:frame], reference[0][:frame])
 
 
+@needs_onnx
+def test_codec_matches_onnx_offline(torch_model):
+    """PyTorch fp32 codec against the ONNX codec offline, on the golden set's codes."""
+    from zerotts_server.model.codec import MossCodecDecoder
+    from zerotts_server.torch_runtime import TorchCodec
+
+    codec = TorchCodec(TORCH_DIR, torch_model.device)
+    reference = MossCodecDecoder(ONNX_DIR / "onnx" / "codec", intra_op_num_threads=8)
+    worst_diff, worst_snr, frames = 0.0, np.inf, 0
+    texts = golden_texts()
+    for i, text in enumerate(texts):
+        emb = voice(VOICES[i % len(VOICES)])
+        for codes in segment_codes(torch_model, split_segments(text), emb, seed=i):
+            codes = codes.T[None]  # (T, K) -> (1, K, T), as the engine decodes
+            ours, theirs = codec.decode(codes), reference.decode(codes)
+            assert ours.dtype == np.float32
+            assert ours.shape == theirs.shape == (1, codes.shape[2] * 3840)
+            error = ours.astype(np.float64) - theirs
+            snr = 10 * np.log10(np.sum(theirs.astype(np.float64) ** 2) / np.sum(error**2))
+            worst_diff, worst_snr = max(worst_diff, float(np.abs(error).max())), min(worst_snr, snr)
+            frames += codes.shape[2]
+    print(
+        f"\ncodec parity: {len(texts)} cases, {frames} frames, "
+        f"max abs diff {worst_diff:.2e}, min SNR {worst_snr:.1f} dB"
+    )
+    assert worst_diff <= CODEC_ATOL
+    assert worst_snr >= CODEC_MIN_SNR_DB
+
+
+def test_weights_have_no_onnx_and_match_manifest():
+    manifest = json.loads((TORCH_DIR / "manifest.json").read_text())
+    files = {
+        path.relative_to(TORCH_DIR).as_posix(): path
+        for path in TORCH_DIR.rglob("*")
+        if path.is_file() and path.name != "manifest.json" and ".cache" not in path.parts
+    }
+
+    assert not [name for name in files if name.endswith((".onnx", ".data"))]
+    assert files.keys() == manifest["files"].keys()
+    for name, path in files.items():
+        with path.open("rb") as f:
+            digest = hashlib.file_digest(f, "sha256").hexdigest()
+        assert manifest["files"][name] == {"sha256": digest, "size": path.stat().st_size}, name
+
+
 # --- HTTP smoke on torch-cuda ---------------------------------------------------
 
 
 @pytest.fixture(scope="module")
 def client(device):
+    import onnxruntime
+
+    def no_onnx(*args, **kwargs):
+        raise AssertionError("torch-cuda must not open an ONNX session")
+
     settings = Settings(model_dir=str(TORCH_DIR), runtime="torch-cuda", device=device)
-    with TestClient(create_app(settings)) as client:
-        deadline = time.monotonic() + 300
-        while (response := client.get("/health")).status_code != 200:
-            assert response.json()["error"]["type"] == "model_loading"
-            assert time.monotonic() < deadline, "model did not load"
-            time.sleep(0.5)
-        yield client
+    # Sessions are opened at load; any ONNX one would fail it, so /health never gets 200.
+    patch = pytest.MonkeyPatch()
+    patch.setattr(onnxruntime, "InferenceSession", no_onnx)
+    try:
+        with TestClient(create_app(settings)) as client:
+            deadline = time.monotonic() + 300
+            while (response := client.get("/health")).status_code != 200:
+                assert response.json()["error"]["type"] == "model_loading"
+                assert time.monotonic() < deadline, "model did not load"
+                time.sleep(0.5)
+            patch.undo()
+            yield client
+    finally:
+        patch.undo()
 
 
 def speak(client, **extra) -> bytes:
