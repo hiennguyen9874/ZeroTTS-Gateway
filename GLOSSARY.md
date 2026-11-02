@@ -12,6 +12,10 @@ _Avoid_: Facade, proxy
 Máy chủ tổng hợp giọng thật sự đứng sau gateway (máy chủ ZeroTTS nói cùng API với audio.cpp).
 _Avoid_: Engine, backend
 
+**Runtime**:
+Cách upstream thực thi model ZeroTTS trên một loại phần cứng, ví dụ ONNX trên CPU hoặc PyTorch trên CUDA; operator chọn runtime, caller không thấy khác biệt về API.
+_Avoid_: Engine, backend, provider
+
 **Caller**:
 Ứng dụng gửi request tới gateway, ví dụ worker của voice agent hoặc công cụ đọc văn bản dài.
 
