@@ -34,6 +34,21 @@ Bộ test `-m cuda` đầy đủ: **10 passed** trong 15 phút. Parity frame c�
 
 Trong lúc load, `onnxruntime.InferenceSession` bị thay bằng hàm báo lỗi. Model vẫn load được, nghĩa là runtime không mở phiên ONNX nào. `test_weights_have_no_onnx_and_match_manifest` kiểm tra rằng thư mục không còn file `.onnx`/`.data`, và mọi file đều khớp manifest về tên, SHA-256 và kích thước. Dựng lại không làm đổi `codec.safetensors` (SHA-256 vẫn là `51c7f324…`).
 
+## Sửa sau review
+
+Review commit `e75c095` theo hai trục Standards và Spec (#19, spec cha #15):
+
+- **Standards (P2):** phép gộp `max/min` có thể bỏ qua NaN, khiến PCM không hợp lệ vẫn vượt ngưỡng parity. Đã tách `codec_metrics` để từ chối NaN và ±Inf ở cả hai đầu vào trước khi tính sai khác và SNR. Hai PCM giống nhau, kể cả im lặng, có SNR +Inf; nhiễu so với im lặng có SNR −Inf.
+- **Standards và Spec (P3):** commit đầu chép codec đồng thời chứa phần tích hợp, trái quy tắc commit riêng của ADR 0006. Commit đã có trên `origin/master`; bản sửa này không viết lại lịch sử. **Chưa giải quyết:** cần operator chấp thuận ngoại lệ rõ ràng hoặc cho phép viết lại lịch sử để tách commit. Không coi một commit bổ sung là đã sửa được việc tách commit ban đầu.
+
+Kiểm chứng bản sửa:
+
+- `uv run pytest tests/test_torch_cuda_validation.py -q`: **18 passed**, gồm 10 ca mới cho NaN/±Inf ở từng đầu vào, PCM giống nhau, im lặng và sai khác hữu hạn.
+- `uv run pytest`: **539 passed, 15 deselected**, đã cài nhóm `torch-weights` bằng `UV_NO_SYNC=false uv run --group torch-weights pytest tests/test_build_zerotts_torch.py -q` (**18 passed**).
+- `uv run ruff check .`, `uv run ruff format --check .`, `git diff --check`: pass.
+- Không chạy lại CUDA vì môi trường hiện tại không có torch. Các số đo GPU ở trên là kết quả trước review, không phải kết quả chạy lại bản sửa.
+- #15 vẫn còn các slice tiếp theo (#20 trở đi); sửa #19 không đồng nghĩa hoàn tất spec cha.
+
 ## Tái lập
 
 ```bash

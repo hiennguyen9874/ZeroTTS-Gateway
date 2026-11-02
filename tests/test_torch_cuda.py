@@ -331,6 +331,17 @@ def test_nondefault_sampling_matches_onnx(torch_model, onnx_generator, sampling)
         assert np.array_equal(actual[0][:frame], reference[0][:frame])
 
 
+def codec_metrics(actual: np.ndarray, reference: np.ndarray) -> tuple[float, float]:
+    assert np.isfinite(actual).all(), "actual codec PCM must be finite"
+    assert np.isfinite(reference).all(), "reference codec PCM must be finite"
+    error = actual.astype(np.float64) - reference
+    noise = np.sum(error**2)
+    signal = np.sum(reference.astype(np.float64) ** 2)
+    with np.errstate(divide="ignore"):
+        snr = np.inf if noise == 0 else 10 * np.log10(signal / noise)
+    return float(np.abs(error).max()), float(snr)
+
+
 @needs_onnx
 def test_codec_matches_onnx_offline(torch_model):
     """PyTorch fp32 codec against the ONNX codec offline, on the golden set's codes."""
@@ -348,9 +359,8 @@ def test_codec_matches_onnx_offline(torch_model):
             ours, theirs = codec.decode(codes), reference.decode(codes)
             assert ours.dtype == np.float32
             assert ours.shape == theirs.shape == (1, codes.shape[2] * 3840)
-            error = ours.astype(np.float64) - theirs
-            snr = 10 * np.log10(np.sum(theirs.astype(np.float64) ** 2) / np.sum(error**2))
-            worst_diff, worst_snr = max(worst_diff, float(np.abs(error).max())), min(worst_snr, snr)
+            difference, snr = codec_metrics(ours, theirs)
+            worst_diff, worst_snr = max(worst_diff, difference), min(worst_snr, snr)
             frames += codes.shape[2]
     print(
         f"\ncodec parity: {len(texts)} cases, {frames} frames, "
