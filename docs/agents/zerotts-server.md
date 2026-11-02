@@ -67,8 +67,10 @@ The script downloads `zeroweight-ai/ZeroTTS-GGUF` `92ca8651…` `gguf/zerotts-f3
 `OpenMOSS-Team/MOSS-Audio-Tokenizer-Nano` `6aa02b01…` `model-00001-of-00001.safetensors`
 with `hf_hub_download(local_dir=...)` (real files, no HF-cache symlinks) into a temporary
 directory, or into `--download-dir` for reuse, and rejects a SHA-256 that differs from the
-pinned one. `--model` (default `models/ZeroTTS`, the downloaded fp32 ONNX directory) supplies
-config, tokenizer, voices and `silence_frame.npy`; `--revision` is its HF commit, checked
+pinned one. The download directory must not be the source or output directory, or inside
+either (including symlink aliases). `--model` (default `models/ZeroTTS`, the downloaded fp32
+ONNX directory) supplies config, tokenizer, voices and `silence_frame.npy`;
+`--revision` is its HF commit, checked
 against HF metadata when present. Output defaults to `--dst models/ZeroTTS-torch`; existing
 output is refused unless `--force`, and the source is never touched. The `gguf`,
 `safetensors` and `onnx` packages live in the `torch-weights` dependency group only.

@@ -128,7 +128,9 @@ def verify_codec_onnx(codec: Path, onnx_dir: Path) -> dict:
                 for label, c in pool
                 if c.shape == value.shape
             ]
-            diff, label = min(diffs, default=(float("inf"), ""))
+            diff, label = min(
+                (item for item in diffs if np.isfinite(item[0])), default=(float("inf"), "")
+            )
             if diff > CODEC_TOLERANCE:
                 raise ValueError(f"{graph}: initializer {init.name} matches no codec tensor")
             folded += label.endswith("(folded)")
@@ -159,6 +161,10 @@ def main() -> None:
     resolved_dst = dst.resolve()
     if src == resolved_dst or src in resolved_dst.parents or resolved_dst in src.parents:
         parser.error("source and output directories must not overlap")
+    if args.download_dir is not None:
+        args.download_dir = args.download_dir.resolve()
+        if any(args.download_dir.is_relative_to(path) for path in (src, resolved_dst)):
+            parser.error("download directory must not be inside source or output directories")
     if dst.is_symlink() or (dst.exists() and not dst.is_dir()):
         parser.error("output must be a directory, not a symlink or file")
     if dst.exists() and not args.force:
