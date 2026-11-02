@@ -2,9 +2,7 @@
 
 ## Môi trường và cách làm
 
-Kiểm chứng trên máy dev, Linux x86_64, Python 3.12.14, numpy 2.5.4, gguf 0.19.0,
-safetensors 0.8.0, onnx 1.20.1, huggingface_hub 2.2.0. Thư mục nguồn `models/ZeroTTS`,
-HF revision `c2bfbd67dc648cac455077333f7cf5c18a2e3bb4`.
+Kiểm chứng trên máy dev, Linux x86_64, Python 3.12.14, numpy 2.5.4, gguf 0.19.0, safetensors 0.8.0, onnx 1.20.1, huggingface_hub 2.2.0. Thư mục nguồn `models/ZeroTTS`, HF revision `c2bfbd67dc648cac455077333f7cf5c18a2e3bb4`.
 
 ```bash
 uv run --group torch-weights python scripts/build_zerotts_torch.py \

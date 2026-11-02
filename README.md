@@ -19,8 +19,7 @@ Docker: `cp .env.example .env`, chọn `COMPOSE_FILE` theo hướng dẫn trong 
 
 ## Weights int8 (tuỳ chọn)
 
-fp32 vẫn là mặc định. Tạo int8 từ weights đã tải, trên host (không tải từ Hub,
-không chạy trong image):
+fp32 vẫn là mặc định. Tạo int8 từ weights đã tải, trên host (không tải từ Hub, không chạy trong image):
 
 ```bash
 uv run --group quantize python scripts/quantize_zerotts.py \
@@ -29,16 +28,7 @@ ZEROTTS_SERVER_MODEL_DIR=models/ZeroTTS-int8 \
   uv run zerotts-server --config configs/zerotts_server.toml
 ```
 
-Thư mục đích mặc định `models/ZeroTTS-int8` chứa đủ weights, tokenizer, voices,
-codec và `quantization.json`; script từ chối ghi đè trừ khi có `--force`.
-Có thể đổi `model_dir` trong config thay cho biến môi trường; quay lại fp32 bằng
-cách chọn `models/ZeroTTS` và khởi động lại. Docker vẫn mount weights read-only.
-Seed chỉ tái lập trên cùng bộ weights/runtime: cùng seed cho audio khác nhau
-giữa fp32 và int8. Hai lần quantize trên máy dev có SHA-256 giống nhau, không
-đảm bảo giữa các máy/phiên bản; nhiều node nên copy chung một thư mục int8.
-Chi tiết: [triển khai](docs/agents/deploy.md#opt-in-int8),
-[báo cáo kiểm chứng](docs/reports/issue12-zerotts-int8.md),
-[A/B chất lượng fp32 so với int8](docs/reports/issue14-zerotts-int8-quality-ab.md).
+Thư mục đích mặc định `models/ZeroTTS-int8` chứa đủ weights, tokenizer, voices, codec và `quantization.json`; script từ chối ghi đè trừ khi có `--force`. Có thể đổi `model_dir` trong config thay cho biến môi trường; quay lại fp32 bằng cách chọn `models/ZeroTTS` và khởi động lại. Docker vẫn mount weights read-only. Seed chỉ tái lập trên cùng bộ weights/runtime: cùng seed cho audio khác nhau giữa fp32 và int8. Hai lần quantize trên máy dev có SHA-256 giống nhau, không đảm bảo giữa các máy/phiên bản; nhiều node nên copy chung một thư mục int8. Chi tiết: [triển khai](docs/agents/deploy.md#opt-in-int8), [báo cáo kiểm chứng](docs/reports/issue12-zerotts-int8.md), [A/B chất lượng fp32 so với int8](docs/reports/issue14-zerotts-int8-quality-ab.md).
 
 ## Tài liệu
 

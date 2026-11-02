@@ -25,8 +25,7 @@ The server listens at once and loads plus warms up the model in the background; 
 
 ### Opt-in int8 (host only)
 
-fp32 remains the default. ZeroTTS does not publish int8 weights on HF; create them
-from an already downloaded fp32 directory (no Hub access):
+fp32 remains the default. ZeroTTS does not publish int8 weights on HF; create them from an already downloaded fp32 directory (no Hub access):
 
 ```bash
 uv run --group quantize python scripts/quantize_zerotts.py \
@@ -35,55 +34,22 @@ ZEROTTS_SERVER_MODEL_DIR=models/ZeroTTS-int8 \
   uv run zerotts-server --config configs/zerotts_server.toml
 ```
 
-The script defaults to `--model models/ZeroTTS --dst models/ZeroTTS-int8`.
-`--revision` is required: supply the actual source HF commit, not a new label for
-old weights. When HF download metadata is present, it must agree with this commit.
-The output is self-contained (config, tokenizer, voices, codec), without HF cache
-metadata. Existing output is refused unless `--force` explicitly requests replacement;
-the source must be separate and stays untouched. Basic ORT graph folding precedes
-dynamic QInt8 MatMul quantization of text_encoder, prefix_step and local_frame_decode;
-codec stays fp32. Sizes and MatMulInteger counts are printed per hot graph.
+The script defaults to `--model models/ZeroTTS --dst models/ZeroTTS-int8`. `--revision` is required: supply the actual source HF commit, not a new label for old weights. When HF download metadata is present, it must agree with this commit. The output is self-contained (config, tokenizer, voices, codec), without HF cache metadata. Existing output is refused unless `--force` explicitly requests replacement; the source must be separate and stays untouched. Basic ORT graph folding precedes dynamic QInt8 MatMul quantization of text_encoder, prefix_step and local_frame_decode; codec stays fp32. Sizes and MatMulInteger counts are printed per hot graph.
 
-`quantization.json` records `source_revision`, `onnx_version`,
-`onnxruntime_version` and `graphs` (relative hot-graph paths with source/output SHA-256,
-MatMulInteger count and byte sizes). Startup logs one `weights` record with
-`model_dir` and `weights: fp32` or, when the manifest exists, `weights: int8`,
-source revision and output hashes. These are manifest identities, not a startup
-integrity scan. Keep the manifest with its weights. The engine and `/v1/models`
-are unchanged. The pinned `onnx` package is in the separate `quantize` dependency
-group, not the server extra or image.
+`quantization.json` records `source_revision`, `onnx_version`, `onnxruntime_version` and `graphs` (relative hot-graph paths with source/output SHA-256, MatMulInteger count and byte sizes). Startup logs one `weights` record with `model_dir` and `weights: fp32` or, when the manifest exists, `weights: int8`, source revision and output hashes. These are manifest identities, not a startup integrity scan. Keep the manifest with its weights. The engine and `/v1/models` are unchanged. The pinned `onnx` package is in the separate `quantize` dependency group, not the server extra or image.
 
-Seed reproducibility applies only to the **same weights** (and runtime).
-The same seed produces different audio with fp32 versus int8. Two quantizations
-on this dev machine produced identical hot-graph SHA-256 hashes; this does not
-guarantee equality across machines or versions. For multiple nodes, prefer copying
-one complete int8 directory. Evidence and reproduction:
-`docs/reports/issue12-zerotts-int8.md`. Dev-machine speed (int8 about 1.4–1.5× faster RTF):
-`docs/reports/issue13-zerotts-int8-speed.md`, measured with `scripts/bench_zerotts.py`
-(engine level, one weights directory per process). Quality A/B (#14, ASR WER 0.074 for
-both; listening verdict pending): `docs/reports/issue14-zerotts-int8-quality-ab.md`.
+Seed reproducibility applies only to the **same weights** (and runtime). The same seed produces different audio with fp32 versus int8. Two quantizations on this dev machine produced identical hot-graph SHA-256 hashes; this does not guarantee equality across machines or versions. For multiple nodes, prefer copying one complete int8 directory. Evidence and reproduction: `docs/reports/issue12-zerotts-int8.md`. Dev-machine speed (int8 about 1.4–1.5× faster RTF): `docs/reports/issue13-zerotts-int8-speed.md`, measured with `scripts/bench_zerotts.py` (engine level, one weights directory per process). Quality A/B (#14, ASR WER 0.074 for both; listening verdict pending): `docs/reports/issue14-zerotts-int8-quality-ab.md`.
 
 ### torch-cuda weights (`models/ZeroTTS-torch`, host only)
 
-The `torch-cuda` runtime (ADR 0007, #15) uses its own self-contained directory, built on the
-host from pinned revisions:
+The `torch-cuda` runtime (ADR 0007, #15) uses its own self-contained directory, built on the host from pinned revisions:
 
 ```bash
 uv run --group torch-weights python scripts/build_zerotts_torch.py \
   --revision c2bfbd67dc648cac455077333f7cf5c18a2e3bb4
 ```
 
-The script downloads `zeroweight-ai/ZeroTTS-GGUF` `92ca8651…` `gguf/zerotts-f32.gguf` and
-`OpenMOSS-Team/MOSS-Audio-Tokenizer-Nano` `6aa02b01…` `model-00001-of-00001.safetensors` and `config.json`
-with `hf_hub_download(local_dir=...)` (real files, no HF-cache symlinks) into a temporary
-directory, or into `--download-dir` for reuse, and rejects a SHA-256 that differs from the
-pinned one. The download directory must not be the source or output directory, or inside
-either (including symlink aliases). `--model` (default `models/ZeroTTS`, the downloaded fp32
-ONNX directory) supplies config, tokenizer, voices and `silence_frame.npy`;
-`--revision` is its HF commit, checked
-against HF metadata when present. Output defaults to `--dst models/ZeroTTS-torch`; existing
-output is refused unless `--force`, and the source is never touched. The `gguf`,
-`safetensors` and `onnx` packages live in the `torch-weights` dependency group only.
+The script downloads `zeroweight-ai/ZeroTTS-GGUF` `92ca8651…` `gguf/zerotts-f32.gguf` and `OpenMOSS-Team/MOSS-Audio-Tokenizer-Nano` `6aa02b01…` `model-00001-of-00001.safetensors` and `config.json` with `hf_hub_download(local_dir=...)` (real files, no HF-cache symlinks) into a temporary directory, or into `--download-dir` for reuse, and rejects a SHA-256 that differs from the pinned one. The download directory must not be the source or output directory, or inside either (including symlink aliases). `--model` (default `models/ZeroTTS`, the downloaded fp32 ONNX directory) supplies config, tokenizer, voices and `silence_frame.npy`; `--revision` is its HF commit, checked against HF metadata when present. Output defaults to `--dst models/ZeroTTS-torch`; existing output is refused unless `--force`, and the source is never touched. The `gguf`, `safetensors` and `onnx` packages live in the `torch-weights` dependency group only.
 
 | File | Content |
 | --- | --- |
@@ -95,18 +61,7 @@ output is refused unless `--force`, and the source is never touched. The `gguf`,
 No ONNX file is copied: the directory has no codec ONNX (#19).
 | `manifest.json` | See below |
 
-`manifest.json` has `format: "zerotts-torch"` (the weights-kind marker), `sources` (repo,
-revision, file, SHA-256, size for `model`, `codec` and `codec_config`; repo and revision for the assets), `tools`
-(python, numpy, gguf, safetensors, onnx, huggingface_hub versions), `tensors` (count per
-safetensors), `codec_onnx_check` and `files` (SHA-256 and size of every other file). Before
-writing, the script re-reads both safetensors and checks every GGUF tensor is equal and every
-initializer of both codec ONNX graphs of `--model` (the reference only) equals a codec tensor (direct, transposed or folded
-weight-norm, max abs diff ≤ 1e-6; 17 folded, 8.9e-8 observed). Two runs gave identical
-SHA-256 for every file: `docs/reports/issue17-zerotts-torch-weights.md`. Serve it with
-`ZEROTTS_SERVER_RUNTIME=torch-cuda ZEROTTS_SERVER_MODEL_DIR=models/ZeroTTS-torch`; the startup
-`weights` record then has `runtime`, `device`, `weights: fp32`, `dtype: float16` (compute precision), `format`, `source_revisions`
-(model, codec, codec_config, assets), `sha256` of both safetensors (from the manifest) and the `torch` version.
-`onnx-cpu` records carry `runtime: onnx-cpu` and `device: cpu`.
+`manifest.json` has `format: "zerotts-torch"` (the weights-kind marker), `sources` (repo, revision, file, SHA-256, size for `model`, `codec` and `codec_config`; repo and revision for the assets), `tools` (python, numpy, gguf, safetensors, onnx, huggingface_hub versions), `tensors` (count per safetensors), `codec_onnx_check` and `files` (SHA-256 and size of every other file). Before writing, the script re-reads both safetensors and checks every GGUF tensor is equal and every initializer of both codec ONNX graphs of `--model` (the reference only) equals a codec tensor (direct, transposed or folded weight-norm, max abs diff ≤ 1e-6; 17 folded, 8.9e-8 observed). Two runs gave identical SHA-256 for every file: `docs/reports/issue17-zerotts-torch-weights.md`. Serve it with `ZEROTTS_SERVER_RUNTIME=torch-cuda ZEROTTS_SERVER_MODEL_DIR=models/ZeroTTS-torch`; the startup `weights` record then has `runtime`, `device`, `weights: fp32`, `dtype: float16` (compute precision), `format`, `source_revisions` (model, codec, codec_config, assets), `sha256` of both safetensors (from the manifest) and the `torch` version. `onnx-cpu` records carry `runtime: onnx-cpu` and `device: cpu`.
 
 ## Workers and voices
 
