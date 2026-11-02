@@ -4,18 +4,19 @@ Code: `src/zerotts_gateway/text.py`. `POST /v1/audio/speech` replaces `input` wi
 
 ## Stages
 
-1. **Guard** (always): `400` before any upstream call for `text_too_long` (`max_input_chars`), `reasoning_markup`, `model_control`, `empty_text`.
-2. **Cleanup** (always, every language): drops code blocks, HTML, URLs, emoji, each with a text warning; flattens markdown tables (separator row dropped, each row one line with cells joined by commas).
-3. **Non-verbal tag removal** (models with `nonverbal_tags = false`, i.e. `zerotts` and `zerotts-stream`; every language, even with normalize off): removes the 13 lowercase tags (`[laughter]`, `[sigh]`, …) and CMU phones (`[B EY1 S]`), adds one `omitted_nonverbal_tag` warning, leaves no stray spaces or punctuation (`Giá [laughter], 50.000đ` → `Giá, 50.000đ`; `[sigh]. Thôi được` → `Thôi được.`; `A, [laughter], B` → `A, B`). Other brackets and `[Laughter]` are untouched. Only tags left → `400 empty_text`.
-4. **Vietnamese normalization** (effective language `vi` and normalize on), in order: lexicon → reading rules → sea-g2p `Normalizer("vi")` with `punc_norm=False` (ADR 0002) → strip `<en>` tags and rejoin spelled letters into uppercase acronyms (`AI`). Brackets other than tags lose their bracket characters.
+1. **Guard** (always): NFC-normalize, then reject `text_too_long` (`max_input_chars`), `reasoning_markup` and `model_control` with `400`, before cleanup or any upstream call.
+2. **Cleanup** (always, every language): drops code blocks, HTML tags, URLs and emoji, each with a text warning; flattens markdown tables (separator row dropped, cells joined by commas). Unpunctuated non-final lines of at most four words join with a comma, longer ones with a period; existing sentence punctuation stays. This preserves short markup/list items more reliably.
+3. **Non-verbal tag removal** (models with `nonverbal_tags = false`, i.e. `zerotts` and `zerotts-stream`; every language, even with normalize off): removes the 13 lowercase tags (`[laughter]`, `[sigh]`, …) and CMU phones (`[B EY1 S]`), adds one `omitted_nonverbal_tag` warning, leaves no stray spaces or punctuation (`Giá [laughter], 50.000đ` → `Giá, 50.000đ`; `[sigh]. Thôi được` → `Thôi được.`; `A, [laughter], B` → `A, B`). Tag removal leaves other brackets and `[Laughter]` untouched; the Vietnamese stage may still remove their brackets. Only tags left → `400 empty_text`.
+4. **Vietnamese normalization** (effective language `vi` and normalize on), in order: lexicon → reading rules → sea-g2p `Normalizer("vi")` with `punc_norm=False` (ADR 0002) → strip `<en>` tags and rejoin spelled letters into uppercase acronyms (`AI`). Brackets other than tags lose their bracket characters; supported tags and phones are protected.
+5. **Finish** (always): collapse whitespace, ensure terminal punctuation and reject `empty_text` with `400` if nothing speakable remains.
 
 `reference_text` goes through the same pipeline and error codes but adds no warnings.
 
-Success responses carry `X-Text-Pipeline-Version` (`<RULES_VERSION>-<lexicon hash>`) and, when anything was omitted, `X-Text-Warnings`.
+Successful speech responses carry `X-Text-Pipeline-Version` (`<RULES_VERSION>-<lexicon hash>`) and, when anything was omitted, `X-Text-Warnings`. The dry-run returns version and warnings in JSON.
 
 ## Reading rules
 
-Gateway-owned pattern rewrites for forms sea-g2p misreads (ADR 0003). Covered today: versions `v2.0`/`Python 3.12`/`GPT-3.5` read "chấm" with cardinal parts; titles like `ThS.` lose the dot before a name; English decimals `3.5` read "phẩy"; ranges `8h-17h`, `25-26/12` get "đến"; slang money `50k`, `2tr5`; digit-by-digit for 1800/1900 hotlines, digits after code/OTP/PIN/account words, and runs starting with 0; `ngày 31/02` is a date while bare `1/3` (a < b ≤ 10) is a fraction; quarters `Q1/2024`; `m²`/`m³`; `1250000` as one number. The lexicon runs first and wins; a product name before a version still gets the "chấm" rule (`iOS 18.2` → `ai ô ét mười tám chấm hai`). Never move reading rules ahead of the lexicon.
+Gateway-owned pattern rewrites for forms sea-g2p misreads (ADR 0003). See `src/zerotts_gateway/text.py` and `tests/golden/pipeline.json` for the current rules and examples. The lexicon runs first and wins; a product name before a version still gets the "chấm" rule (`iOS 18.2` → `ai ô ét mười tám chấm hai`). Keep that precedence when changing either stage.
 
 ## Lexicon
 

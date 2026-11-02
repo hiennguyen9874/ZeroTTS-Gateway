@@ -7,7 +7,7 @@ Code: `src/zerotts_gateway/` (`app.py` routes, `config.py` settings, `text.py` p
 | Route | Auth | Behaviour |
 | --- | --- | --- |
 | `GET /health` | none | Gateway process alive |
-| `GET /ready` | none | 200 when the upstream is reachable, else 503 `upstream_unavailable` |
+| `GET /ready` | none | 200 only when upstream `/health` and `/v1/models` both succeed within 5 s; otherwise 503 `upstream_unavailable` |
 | `GET /v1/models`, `GET /v1/audio/voices` | key | Passed through to the upstream |
 | `POST /v1/audio/speech` | key | Text pipeline, then one upstream request; response streamed through chunk by chunk |
 | `POST /v1/text/normalize` | key | Dry-run of the text pipeline; never calls the upstream |
@@ -16,9 +16,9 @@ Code: `src/zerotts_gateway/` (`app.py` routes, `config.py` settings, `text.py` p
 
 ## Forwarding rules
 
-- `voice_ref` as a string or `{"type":"path"}` → `400 voice_ref_path_not_allowed` (it would let callers read files on the upstream host). Other unsupported options are the upstream's job to reject.
+- `voice_ref` as a string or `{"type":"path"}` → `400 voice_ref_path_not_allowed` (it would let callers read files on the upstream host). Only a `{"type":"base64", ...}` object passes this check; other forms get `400 invalid_request`. The ZeroTTS upstream rejects even base64 references as unsupported.
 - `text_processing: {"normalize": bool}` is consumed by the gateway and stripped before forwarding.
-- Upstream error responses are passed through whole, status and body unchanged; the gateway retries nothing.
+- Upstream error responses are passed through whole, status and body unchanged; the gateway retries nothing. Forwarded responses preserve content type, not arbitrary upstream headers: in particular the upstream SSE `X-Accel-Buffering: no` is not forwarded, so configure reverse proxies to disable buffering separately.
 - `connect_timeout_s` bounds only the connect: past it, `502 upstream_unavailable`. `deadline_s` is absolute (first byte plus whole body): before the first byte it becomes `504 upstream_timeout`; after that the caller connection is aborted, as when the upstream breaks mid-stream.
 - `[models.<id>]` gives per-model defaults (`language`, `normalize`, `nonverbal_tags`); unknown model ids are still forwarded.
 

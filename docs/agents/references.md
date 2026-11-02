@@ -17,7 +17,7 @@ Nothing needs them to run the gateway, the upstream or the default tests. Leave 
 - `gipformer`: `infer_onnx.py` is the sherpa-onnx transducer setup mirrored by `scripts/asr_server.py`.
 - `llm-wiki`: Vietnamese speech knowledge base for pipeline design. Under `outputs/`: `chuong-19-cau-text-to-speech-chunker-normalizer-lexicon.md`, `chuong-05-ngu-am-chu-viet-va-van-ban-tieng-viet.md`, `chuong-13-tts-tu-van-ban-toi-waveform.md`, `survey-cau-text-to-speech-tien-hau-xu-ly-sau-llm.md`, `lua-chon-va-thiet-ke-tts-tieng-viet-realtime.md`.
 
-Removed on purpose, keep them out: OmniVoice and VieNeu-TTS (retired engines), ZeroTTS-GGUF (ggml runtime rejected, ADR 0005), and every HF model clone (OmniVoice checkpoints and finetunes, VieNeu-TTS-v3-Turbo, ZeroTTS, gipformer). Their last revisions are in git history; historical evaluations remain in ADRs and reports.
+Keep retired engines and HF model clones out of `references/`; their last submodule revisions are in git history and historical evaluations remain in ADRs and reports. The `torch-cuda` weights builder does download a pinned ZeroTTS-GGUF **file** as a conversion source; it does not deploy the rejected ggml runtime (ADR 0007). See `docs/agents/zerotts-cuda.md`.
 
 ## Weights
 

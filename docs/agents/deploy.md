@@ -1,33 +1,20 @@
 # Deployment
 
-Gateway and `zerotts_server` are always separate containers, so each can change, rebuild or scale alone. CPU only: no GPU, NVIDIA driver or container toolkit. `docker compose` reads `COMPOSE_FILE` from `.env`; the three shapes and every variable are documented in `.env.example`, and each compose file explains itself in its header.
+The provided Compose files run gateway and `zerotts_server` in separate containers; the upstream image is CPU-only and contains no torch. For the host-run CUDA runtime and its packaging status, see `docs/agents/zerotts-cuda.md`. `docker compose` reads `COMPOSE_FILE` from `.env`; variables are documented in `.env.example`.
 
-| Shape | `COMPOSE_FILE` |
-| --- | --- |
-| Gateway only, upstream elsewhere | `compose.yaml` |
-| Gateway + upstream on one CPU node | `compose.yaml:compose.zerotts.yaml:compose.zerotts-stack.yaml` |
-| Upstream only, separate CPU node | `compose.zerotts.yaml` |
+For the combined CPU stack, download weights with `uv run scripts/download_zerotts.sh`, copy `.env.example` to `.env`, select its combined `COMPOSE_FILE` and set `ZEROTTS_GATEWAY_API_KEY` if exposed. Then run:
 
 ```bash
-uv run scripts/download_zerotts.sh   # weights first (~860 MB)
-cp .env.example .env                 # set COMPOSE_FILE, ZEROTTS_GATEWAY_API_KEY if exposed
 docker compose up -d --build
-docker compose ps                    # both "healthy"
-curl -f localhost:8000/ready
+docker compose ps                    # both healthy
+curl -f localhost:8000/ready         # use GATEWAY_PORT if changed
 ```
+
+For gateway-only, supply a reachable upstream; for upstream-only, check `http://127.0.0.1:8080/health` instead (use `ZEROTTS_SERVER_PORT` if changed).
 
 ## Opt-in int8
 
-fp32 is the default. Quantize on the **host**, never in the server image:
-
-```bash
-uv run --group quantize python scripts/quantize_zerotts.py \
-  --revision c2bfbd67dc648cac455077333f7cf5c18a2e3bb4
-```
-
-Set `model_dir = "../models/ZeroTTS-int8"` in `configs/zerotts_server.toml`, then restart the upstream. The existing compose mount of `./models` at `/srv/models` is read-only and includes both directories. Alternatively, pass `ZEROTTS_SERVER_MODEL_DIR=/srv/models/ZeroTTS-int8` in the container environment (a host shell variable alone is not forwarded by compose). On the host use `ZEROTTS_SERVER_MODEL_DIR=models/ZeroTTS-int8`. No engine or image change is needed.
-
-To disable int8, restore `model_dir = "../models/ZeroTTS"`, remove any model-dir environment override, and restart. Retain `quantization.json` beside the int8 weights: startup logs identify the directory, weight type, source revision and graph hashes. Seed reproducibility is only within the same weights/runtime; fp32 and int8 produce different audio for the same seed. For multiple nodes, copy one complete int8 directory (including manifest), mounted read-only on each node, rather than relying on independent conversions. See `docs/agents/zerotts-server.md#opt-in-int8-host-only` and the `docs/reports/issue12-zerotts-int8.md` reproducibility check.
+Create int8 weights on the host as described in `docs/agents/zerotts-server.md#opt-in-int8-host-only`. Set `model_dir = "../models/ZeroTTS-int8"` in `configs/zerotts_server.toml` and restart the upstream. The existing read-only `./models:/srv/models` mount includes both directories. Alternatively, explicitly pass `ZEROTTS_SERVER_MODEL_DIR=/srv/models/ZeroTTS-int8` in the container environment: a host shell variable alone is not forwarded by the provided Compose file. To revert, select the fp32 directory and remove any model-dir override.
 
 ## Gotchas
 
