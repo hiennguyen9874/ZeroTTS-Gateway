@@ -103,6 +103,13 @@ Mọi worker cho cùng SHA-256 audio với lần chạy một worker. Test HTTP 
   - `cuda:99` cho `model_load_failed`.
 - **Không có GPU:** sau `uv sync` (môi trường mặc định, không có torch), `uv run pytest`, `uv run ruff check .` và `uv run ruff format --check .` đều pass.
 
+## Sửa sau review
+
+- Khởi tạo weights codec, trạng thái streaming và reset mask trên CUDA stream của worker, cùng stream với warmup và giải mã; không còn phụ thuộc thứ tự ngầm giữa các stream.
+- Benchmark nhiều worker dùng future để truyền lỗi tổng hợp về luồng chính và chờ mọi worker kết thúc trước khi trả lỗi. Worker lỗi không còn tạo kết quả thông lượng thiếu request nhưng trông như thành công.
+- Thêm test CPU cho benchmark offline/streaming: đủ request khi thành công; từ chối lỗi sau audio một phần, cả ở lượt đầu và sau một lượt thành công. Bốn ca lỗi fail trước sửa và pass sau sửa.
+- Chưa chạy lại phép đo hoặc xác nhận GPU sau bản sửa: 14 test CUDA đều skip vì môi trường không có torch. Các số đo GPU ở trên thuộc lần triển khai trước review. Quyết định tiếp/dừng vẫn cần operator ghi vào issue.
+
 ## Giới hạn
 
 - Chỉ đo trên một A100 của máy dev. GPU khác (ví dụ không có bf16, VRAM nhỏ) chưa đo.

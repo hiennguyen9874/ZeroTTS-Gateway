@@ -545,22 +545,24 @@ class TorchCodec:
         self.device, self.stream = device, stream
         config = json.loads((model_dir / "codec_config.json").read_text())
         self.num_codebooks = int(config["quantizer_kwargs"]["num_quantizers"])
-        self.model = self._load(model_dir, config)
+        with torch.cuda.stream(stream):
+            self.model = self._load(model_dir, config)
         # Load-time CUDA setup, and fail at load rather than on the first request.
         self.decode(np.zeros((1, self.num_codebooks, 1), dtype=np.int64))
 
-        self._streaming = self._load(model_dir, config)
-        self._stack = ExitStack()
-        self._stack.enter_context(self._streaming.streaming(batch_size=1))
-        self._states = [
-            m._streaming_state
-            for m in self._streaming.modules()
-            if getattr(m, "_streaming_state", None) is not None
-        ]
-        self._reset_mask = torch.ones(1, dtype=torch.bool, device=device)
         self._graphs: dict[int, tuple] = {}
         sizes = range(1, STREAM_MAX_CHUNK_FRAMES + 1)
+        # State initialization must be ordered before warmup on the worker's stream.
         with torch.no_grad(), torch.cuda.stream(stream):
+            self._streaming = self._load(model_dir, config)
+            self._stack = ExitStack()
+            self._stack.enter_context(self._streaming.streaming(batch_size=1))
+            self._states = [
+                m._streaming_state
+                for m in self._streaming.modules()
+                if getattr(m, "_streaming_state", None) is not None
+            ]
+            self._reset_mask = torch.ones(1, dtype=torch.bool, device=device)
             self._inputs = {
                 n: torch.zeros(self.num_codebooks, 1, n, dtype=torch.int64, device=device)
                 for n in sizes

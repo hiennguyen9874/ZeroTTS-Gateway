@@ -28,8 +28,8 @@ import resource
 import statistics
 import subprocess
 import sys
-import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 from pathlib import Path
 
@@ -191,20 +191,15 @@ def _vram_mib(device) -> dict:
 
 def _concurrent(engines, segments, voice, seed, sampling, stream, runs) -> dict:
     """Every engine synthesizes the same request `runs` times in its own thread, all at once."""
-    results: list[list[dict]] = [[] for _ in engines]
 
-    def work(i, engine):
-        for _ in range(runs):
-            results[i].append(_run(engine, segments, voice, seed, sampling, stream, {}))
+    def work(engine):
+        return [_run(engine, segments, voice, seed, sampling, stream, {}) for _ in range(runs)]
 
     t = time.perf_counter()
-    threads = [threading.Thread(target=work, args=(i, e)) for i, e in enumerate(engines)]
-    for thread in threads:
-        thread.start()
-    for thread in threads:
-        thread.join()
+    with ThreadPoolExecutor(max_workers=len(engines)) as executor:
+        futures = [executor.submit(work, engine) for engine in engines]
+        flat = [run for future in futures for run in future.result()]
     wall = time.perf_counter() - t
-    flat = [r for per_engine in results for r in per_engine]
     audio = sum(r["audio_s"] for r in flat)
     out = {
         "requests": len(flat),
