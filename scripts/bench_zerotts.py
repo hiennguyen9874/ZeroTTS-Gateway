@@ -166,23 +166,23 @@ def main() -> int:
         },
     }
 
-    import zerotts
+    from zerotts_server.model.synthesizer import ZeroTTS
 
     rss_before = _rss_mib()[0]
     warm = {}
-    original_warmup = zerotts.ZeroTTS.warmup
+    original_warmup = ZeroTTS.warmup
 
     def timed_warmup(self):
         t = time.perf_counter()
         original_warmup(self)
         warm["s"] = time.perf_counter() - t
 
-    zerotts.ZeroTTS.warmup = timed_warmup
+    ZeroTTS.warmup = timed_warmup
     engine = ZeroTTSEngine(model_dir, model_dir / "voices", args.threads)
     t = time.perf_counter()
     engine.load()
     load_total = time.perf_counter() - t
-    zerotts.ZeroTTS.warmup = original_warmup
+    ZeroTTS.warmup = original_warmup
     result["load"] = {
         "load_and_warmup_s": round(load_total, 3),
         "warmup_s": round(warm["s"], 3),

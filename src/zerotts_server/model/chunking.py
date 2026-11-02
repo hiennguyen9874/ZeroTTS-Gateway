@@ -125,7 +125,7 @@ def _pack_pieces(pieces: list[str], max_chars: int) -> list[str]:
 
 
 def _split_by_chars(text: str, max_chars: int) -> list[str]:
-    return [text[i:i + max_chars] for i in range(0, len(text), max_chars)]
+    return [text[i : i + max_chars] for i in range(0, len(text), max_chars)]
 
 
 def _split_by_words(text: str, max_chars: int) -> list[str]:
@@ -214,18 +214,18 @@ _END_PUNCT = {".", "!", "?"}
 def clean_segment_punctuation(text: str) -> str:
     """Normalize a single chunked segment's punctuation for TTS:
 
-        1. every mid-segment punctuation mark other than
-           '-', '/', '.', ':', '?', '!', '"', "'", '%' becomes a ',' pause
-        2. terminal mark: kept as-is if it's '.', '!', or '?', otherwise
-           whatever trails (comma, dash, stray symbol, nothing) -> '.'
+    1. every mid-segment punctuation mark other than
+       '-', '/', '.', ':', '?', '!', '"', "'", '%' becomes a ',' pause
+    2. terminal mark: kept as-is if it's '.', '!', or '?', otherwise
+       whatever trails (comma, dash, stray symbol, nothing) -> '.'
     """
     text = text.strip()
     if not text:
         return text
 
     m = _TRAILING_RE.search(text)
-    core = text[:m.start()] if m else text
-    trailing = text[m.start():].rstrip() if m else ""
+    core = text[: m.start()] if m else text
+    trailing = text[m.start() :].rstrip() if m else ""
 
     end_punct = trailing[-1] if trailing and trailing[-1] in _END_PUNCT else "."
 
@@ -239,6 +239,7 @@ def clean_segment_punctuation(text: str) -> str:
 
 # ── sample text file loading ─────────────────────────────────────────────────
 # Used by the Gradio demo's "Sample texts" picker.
+
 
 def load_text_samples(path) -> dict[str, str]:
     """Parse a "### name" delimited sample-text file (see webui/test_samples.txt's

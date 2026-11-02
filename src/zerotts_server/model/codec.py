@@ -31,10 +31,10 @@ import numpy as np
 
 class MossCodecDecoder:
     """Args:
-        codec_dir: directory holding the decoder graphs and
-            ``codec_browser_onnx_meta.json``.
-        providers: onnxruntime execution providers.
-        intra_op_num_threads: per-session thread count.
+    codec_dir: directory holding the decoder graphs and
+        ``codec_browser_onnx_meta.json``.
+    providers: onnxruntime execution providers.
+    intra_op_num_threads: per-session thread count.
     """
 
     def __init__(
@@ -50,7 +50,8 @@ class MossCodecDecoder:
         if not meta_path.exists():
             raise FileNotFoundError(
                 f"{codec_dir} has no codec_browser_onnx_meta.json — the vendored "
-                f"codec is missing from this model directory.")
+                f"codec is missing from this model directory."
+            )
         meta = json.loads(meta_path.read_text())
         self._meta = meta
 
@@ -119,15 +120,19 @@ class MossStreamingDecoder:
             self._state[str(spec["input_name"])] = np.zeros(tuple(spec["shape"]), dtype=np.int32)
         for spec in self._attention_specs:
             self._state[str(spec["offset_input_name"])] = np.zeros(
-                tuple(spec["offset_shape"]), dtype=np.int32)
+                tuple(spec["offset_shape"]), dtype=np.int32
+            )
             self._state[str(spec["cached_keys_input_name"])] = np.zeros(
-                tuple(spec["cache_shape"]), dtype=np.float32)
+                tuple(spec["cache_shape"]), dtype=np.float32
+            )
             self._state[str(spec["cached_values_input_name"])] = np.zeros(
-                tuple(spec["cache_shape"]), dtype=np.float32)
+                tuple(spec["cache_shape"]), dtype=np.float32
+            )
             # -1, not 0: position 0 is a real position, so a zero-filled ring
             # buffer would read as "every slot holds frame 0".
             self._state[str(spec["cached_positions_input_name"])] = np.full(
-                tuple(spec["positions_shape"]), -1, dtype=np.int32)
+                tuple(spec["positions_shape"]), -1, dtype=np.int32
+            )
 
     def decode_chunk(self, codes_bkt: np.ndarray) -> np.ndarray:
         """(1, K, n) int codes -> (1, chunk_samples) float32 mono."""
@@ -141,7 +146,7 @@ class MossStreamingDecoder:
             **self._state,
         }
         outputs = self._session.run(None, feeds)
-        named = dict(zip(self._output_names, outputs))
+        named = dict(zip(self._output_names, outputs, strict=False))
         for spec in self._transformer_specs:
             self._state[str(spec["input_name"])] = named[str(spec["output_name"])]
         for spec in self._attention_specs:

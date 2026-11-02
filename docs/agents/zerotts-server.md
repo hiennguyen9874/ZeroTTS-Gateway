@@ -1,6 +1,6 @@
 # zerotts_server
 
-The upstream (ADR 0005): wraps `zerotts==0.1.5` on onnxruntime CPU and speaks the part of audio.cpp's API the gateway uses. Code: `src/zerotts_server/` (`app.py` routes, `engine.py` synthesis, `config.py`). Config keys, defaults and env overrides are documented in `configs/zerotts_server.toml`; relative paths resolve from the config file's directory.
+The upstream (ADR 0005): runs vendored ZeroTTS code on onnxruntime CPU and speaks the part of audio.cpp's API the gateway uses. Code: `src/zerotts_server/` (`app.py` routes, `engine.py` synthesis, `config.py`). Config keys, defaults and env overrides are documented in `configs/zerotts_server.toml`; relative paths resolve from the config file's directory.
 
 ```bash
 uv sync                      # dev group pulls in the `server` extra
@@ -93,3 +93,7 @@ One JSON line per request: model, voice, seed, char count, `segments`, `wait_ms`
 ## Tests
 
 `tests/test_server.py` uses a fake engine. `tests/test_server_smoke.py` (marker `real_model`) is deselected by default; run `uv run python -m pytest -m real_model`, which still skips without weights in `models/ZeroTTS` (or `ZEROTTS_SERVER_MODEL_DIR` when set). To check int8: `ZEROTTS_SERVER_MODEL_DIR=models/ZeroTTS-int8 uv run python -m pytest -m real_model tests/test_server_smoke.py`.
+
+## Vendored model code
+
+`src/zerotts_server/model/` comes from ZeroTTS commit `319c3e0` (PyPI 0.1.5); provenance, licenses and the comparison command are in `model/VENDORED.md`. The server uses local weights only. The quantization script operates on ONNX files and does not import model code. For the opt-in byte-equivalence check and its environment constraints, see `docs/reports/issue16-vendored-zerotts.md`.

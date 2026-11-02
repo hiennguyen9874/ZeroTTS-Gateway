@@ -17,7 +17,8 @@ import numpy as np
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
-from zerotts.chunking import chunk_text
+
+from zerotts_server.model.chunking import chunk_text
 
 from .config import Settings
 from .engine import SAMPLE_RATE, Engine, ZeroTTSEngine

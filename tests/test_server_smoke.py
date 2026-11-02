@@ -6,6 +6,7 @@ Run explicitly with `uv run python -m pytest -m real_model`.
 """
 
 import base64
+import hashlib
 import io
 import json
 import os
@@ -111,3 +112,28 @@ def test_stream_is_nonempty_48k_audio_with_low_ttfa(client):
     print(f"stream ttft_ms={ttft_ms}")
     # Spec: a few hundred ms on CPU; loose bound because the dev machine is shared.
     assert ttft_ms < 2000
+
+
+@pytest.mark.skipif(
+    os.environ.get("ZEROTTS_VENDOR_BASELINE") not in {"fp32", "int8"},
+    reason="set ZEROTTS_VENDOR_BASELINE to fp32 or int8 for the recorded environment",
+)
+def test_vendored_audio_matches_package_baseline(client):
+    # These hashes describe the specific weights and platform in the issue #16 report.
+    expected = {
+        "fp32": (
+            "cfa1a2aa11845b5d518094ca14e2b840bf5ef63cc8925b4a649ee4a8216368ff",
+            "1cc72857629becb3ec3955e99e1e2597fdffbf99c23a12addbc0a7de5664141f",
+        ),
+        "int8": (
+            "51206719bd450ca93ff8d563a5c8072a9820377be5b891c939718910bd81c9fa",
+            "6a1c2dd7d0c74c30b7f35cbd5620adc5345c9f056947fdc6ba43d16aaf62e420",
+        ),
+    }[os.environ["ZEROTTS_VENDOR_BASELINE"]]
+    text = "Xin chào các bạn. Hôm nay trời rất đẹp."
+    options = {"voice": "maichi", "seed": 1234}
+    response = client.post("/v1/audio/speech", json={"model": "zerotts", "input": text, **options})
+    assert response.status_code == 200, response.text
+    stream, _ = stream_sse(client, text, **options)
+    assert hashlib.sha256(response.content).hexdigest() == expected[0]
+    assert hashlib.sha256(stream).hexdigest() == expected[1]

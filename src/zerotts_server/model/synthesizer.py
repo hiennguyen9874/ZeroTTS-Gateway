@@ -37,13 +37,13 @@ sampled frame.
 
 from __future__ import annotations
 
+import json
 import shutil
 import time
 from pathlib import Path
 
 import numpy as np
 
-from . import hub
 from . import voices as _voices
 from .audio import save_wav
 from .codec import MossCodecDecoder
@@ -52,11 +52,34 @@ from .tokenizer import load_tokenizer
 DEFAULT_MAX_FRAMES = 1500
 
 
+def load_config(model_dir: Path) -> dict:
+    """Read and validate the local model configuration and required graphs."""
+    config_path = model_dir / "config.json"
+    if not config_path.exists():
+        raise FileNotFoundError(
+            f"{model_dir} has no config.json — it is not a ZeroTTS model directory."
+        )
+    required = (
+        "config.json",
+        "null_voice_emb.npy",
+        "onnx/text_encoder.onnx",
+        "onnx/prefix_step.onnx",
+        "onnx/local_frame_decode.onnx",
+    )
+    missing = [f for f in required if not (model_dir / f).exists()]
+    if missing:
+        raise FileNotFoundError(
+            f"{model_dir} is missing {missing}. If this is a local export, it may "
+            f"predate the published layout (graphs under onnx/, text_encoder.onnx "
+            f"formerly named char_embed.onnx)."
+        )
+    return json.loads(config_path.read_text())
+
+
 class ZeroTTS:
     """ZeroTTS synthesizer.
 
-    Prefer :meth:`from_pretrained`. The constructor takes an already-resolved
-    local directory.
+    The constructor takes an already-resolved local directory.
     """
 
     def __init__(
@@ -72,7 +95,7 @@ class ZeroTTS:
         model_dir = Path(model_dir)
         self.model_dir = model_dir
         self.providers = providers or ["CPUExecutionProvider"]
-        config = hub.load_config(model_dir)
+        config = load_config(model_dir)
         self.config = config
 
         sess_options = ort.SessionOptions()
@@ -108,8 +131,11 @@ class ZeroTTS:
         self.tokenizer = load_tokenizer(config, model_dir)
         self.null_voice_emb = np.load(model_dir / "null_voice_emb.npy").astype(np.float32)
 
-        n_codec_threads = (codec_intra_op_num_threads
-                           if codec_intra_op_num_threads is not None else intra_op_num_threads)
+        n_codec_threads = (
+            codec_intra_op_num_threads
+            if codec_intra_op_num_threads is not None
+            else intra_op_num_threads
+        )
         self.codec = MossCodecDecoder(
             model_dir / "onnx" / "codec",
             providers=self.providers,
@@ -133,24 +159,6 @@ class ZeroTTS:
 
     # ── construction ─────────────────────────────────────────────────────────
 
-    @classmethod
-    def from_pretrained(
-        cls,
-        model_id: str | Path = hub.DEFAULT_REPO_ID,
-        revision: str | None = None,
-        cache_dir: str | None = None,
-        local_files_only: bool = False,
-        **kwargs,
-    ) -> ZeroTTS:
-        """Load from a Hugging Face repo id or a local directory.
-
-            tts = ZeroTTS.from_pretrained("zeroweight-ai/ZeroTTS")
-        """
-        model_dir = hub.resolve_model_dir(
-            model_id, revision=revision, cache_dir=cache_dir,
-            local_files_only=local_files_only)
-        return cls(model_dir, **kwargs)
-
     def warmup(self) -> None:
         """Push one dummy request through every session on the hot path, so lazy
         allocator and thread-pool setup lands here instead of skewing the first
@@ -159,16 +167,30 @@ class ZeroTTS:
         text_ids = np.zeros((1, 1), dtype=np.int64)
         txt_lengths = np.ones(1, dtype=np.int64)
         h, packed_kv, full_valid, cross_kv, text_valid = self._prefix_step_init(
-            text_ids, txt_lengths, self.null_voice_emb)
+            text_ids, txt_lengths, self.null_voice_emb
+        )
         seen = np.zeros((1, self.num_codebooks, self.codebook_size), dtype=bool)
         _ctrl, codes = self._local_decode_frame(
-            h, forbid_eoa=True, text_temperature=1.0, text_topk=50,
-            audio_temperature=0.8, audio_topk=25, audio_topp=0.95,
-            audio_repetition_penalty=1.2, seen_mask=seen, cfg_scale=1.0)
+            h,
+            forbid_eoa=True,
+            text_temperature=1.0,
+            text_topk=50,
+            audio_temperature=0.8,
+            audio_topk=25,
+            audio_topp=0.95,
+            audio_repetition_penalty=1.2,
+            seen_mask=seen,
+            cfg_scale=1.0,
+        )
         self._prefix_step_frame(
-            codes[:, None, :], np.array([0], dtype=np.int64), packed_kv, full_valid,
+            codes[:, None, :],
+            np.array([0], dtype=np.int64),
+            packed_kv,
+            full_valid,
             n_voice=self.null_voice_emb.shape[1],
-            cross_kv=cross_kv, text_valid=text_valid)
+            cross_kv=cross_kv,
+            text_valid=text_valid,
+        )
 
     # ── voices ───────────────────────────────────────────────────────────────
 
@@ -195,7 +217,8 @@ class ZeroTTS:
             if not packs:
                 raise FileNotFoundError(
                     f"no voice pack in {path} — expected the downloaded .zip, a "
-                    "directory with a voice.npz in it, or a directory of those")
+                    "directory with a voice.npz in it, or a directory of those"
+                )
 
         # Validated eagerly. A pack built for different weights is a real and
         # quiet failure mode (right dtype, right rank, wrong model), and finding
@@ -248,8 +271,9 @@ class ZeroTTS:
 
     # ── prefix_step.onnx (cold start + per-frame step share one session) ──────
 
-    def _prefix_step_init(self, text_ids: np.ndarray, txt_lengths: np.ndarray,
-                          voice_emb: np.ndarray):
+    def _prefix_step_init(
+        self, text_ids: np.ndarray, txt_lengths: np.ndarray, voice_emb: np.ndarray
+    ):
         """Cold start: build the [voice | soa] prefix from an empty KV cache.
 
         ``voice_emb`` (B, V, d) sets the batch — B=1 normally, B=2 for CFG
@@ -273,11 +297,14 @@ class ZeroTTS:
         # longer fed anywhere; it is returned for inspection only.
         _text_states, text_valid, soa_embed, cross_kv = self.text_encoder_sess.run(
             None,
-            {"text_ids": np.ascontiguousarray(text_ids),
-             "txt_lengths": np.ascontiguousarray(txt_lengths)},
+            {
+                "text_ids": np.ascontiguousarray(text_ids),
+                "txt_lengths": np.ascontiguousarray(txt_lengths),
+            },
         )
         external_embed = np.concatenate(
-            [voice_emb.astype(np.float32), soa_embed.astype(np.float32)], axis=1)
+            [voice_emb.astype(np.float32), soa_embed.astype(np.float32)], axis=1
+        )
         T = V + 1
         hidden, packed_kv, full_valid = self.prefix_step_sess.run(
             None,
@@ -288,9 +315,11 @@ class ZeroTTS:
                 "new_pos": np.tile(np.arange(T, dtype=np.int64), (B, 1)),
                 "new_valid": np.ones((B, T), dtype=bool),
                 "packed_kv": np.zeros(
-                    (self.n_layers, 2, B, self.n_heads, 0, self.d_head), dtype=np.float32),
+                    (self.n_layers, 2, B, self.n_heads, 0, self.d_head), dtype=np.float32
+                ),
                 "new_bidirectional": np.concatenate(
-                    [np.ones((B, V), dtype=bool), np.zeros((B, 1), dtype=bool)], axis=1),
+                    [np.ones((B, V), dtype=bool), np.zeros((B, 1), dtype=bool)], axis=1
+                ),
                 "past_valid": np.zeros((B, 0), dtype=bool),
                 "cross_kv": cross_kv,
                 "text_valid": text_valid,
@@ -298,9 +327,16 @@ class ZeroTTS:
         )
         return hidden[:, -1, :], packed_kv, full_valid, cross_kv, text_valid
 
-    def _prefix_step_frame(self, frame_codes: np.ndarray, frame_index: np.ndarray,
-                           packed_kv: np.ndarray, full_valid: np.ndarray, n_voice: int = 0,
-                           cross_kv=None, text_valid=None):
+    def _prefix_step_frame(
+        self,
+        frame_codes: np.ndarray,
+        frame_index: np.ndarray,
+        packed_kv: np.ndarray,
+        full_valid: np.ndarray,
+        n_voice: int = 0,
+        cross_kv=None,
+        text_valid=None,
+    ):
         """Advance the global transformer by one frame (T=1, S_past = cache len).
 
         ``n_voice`` shifts the position id: the voice block occupies logical
@@ -334,9 +370,19 @@ class ZeroTTS:
 
     # ── frame generation ─────────────────────────────────────────────────────
 
-    def _local_decode_frame(self, h, forbid_eoa, text_temperature, text_topk,
-                            audio_temperature, audio_topk, audio_topp,
-                            audio_repetition_penalty, seen_mask, cfg_scale=1.0):
+    def _local_decode_frame(
+        self,
+        h,
+        forbid_eoa,
+        text_temperature,
+        text_topk,
+        audio_temperature,
+        audio_topk,
+        audio_topp,
+        audio_repetition_penalty,
+        seen_mask,
+        cfg_scale=1.0,
+    ):
         """Decode one frame from the global hidden — one call to the fused graph.
 
         h is (1, d) with no guidance, (2, d) = [conditional; unconditional] with
@@ -356,14 +402,15 @@ class ZeroTTS:
                 "text_temperature": np.array([text_temperature], dtype=np.float32),
                 "text_topk": np.array(
                     [text_topk if text_topk and text_topk > 0 else self.codebook_size],
-                    dtype=np.int64),
+                    dtype=np.int64,
+                ),
                 "audio_temperature": np.array([audio_temperature], dtype=np.float32),
                 "audio_topk": np.array(
                     [audio_topk if audio_topk and audio_topk > 0 else self.codebook_size],
-                    dtype=np.int64),
+                    dtype=np.int64,
+                ),
                 "audio_topp": np.array([audio_topp], dtype=np.float32),
-                "audio_repetition_penalty": np.array(
-                    [audio_repetition_penalty], dtype=np.float32),
+                "audio_repetition_penalty": np.array([audio_repetition_penalty], dtype=np.float32),
                 "seen_mask": seen_mask,
                 "ctrl_random_u": np.random.random(1).astype(np.float32),
                 "audio_random_u": np.random.random((1, K)).astype(np.float32),
@@ -375,11 +422,22 @@ class ZeroTTS:
             seen_mask[0, c, codes[0, c]] = True
         return (self.eoa_id if bool(is_eoa.reshape(-1)[0]) else self.slot_id), codes
 
-    def _generate_frames(self, text, min_frames, max_frames, voice_emb=None,
-                         cfg_scale=1.0, text_temperature=1.0, text_topk=50,
-                         audio_temperature=0.8, audio_topk=25, audio_topp=0.95,
-                         audio_repetition_penalty=1.2, eoa_extra_frames=1,
-                         timing=None):
+    def _generate_frames(
+        self,
+        text,
+        min_frames,
+        max_frames,
+        voice_emb=None,
+        cfg_scale=1.0,
+        text_temperature=1.0,
+        text_topk=50,
+        audio_temperature=0.8,
+        audio_topk=25,
+        audio_topp=0.95,
+        audio_repetition_penalty=1.2,
+        eoa_extra_frames=1,
+        timing=None,
+    ):
         """Generator yielding one (1, num_codebooks) int64 frame at a time.
 
         ``eoa_extra_frames``: how many frames sampled at and after <eoa> to KEEP.
@@ -403,7 +461,8 @@ class ZeroTTS:
 
         t_ttft0 = time.perf_counter() if timing is not None else None
         h, packed_kv, full_valid, cross_kv, text_valid = self._prefix_step_init(
-            text_ids, txt_lengths, voice_emb)
+            text_ids, txt_lengths, voice_emb
+        )
 
         step_times = [] if timing is not None else None
         n_frames = 0
@@ -416,12 +475,17 @@ class ZeroTTS:
             t_step0 = time.perf_counter() if timing is not None else None
 
             ctrl, codes = self._local_decode_frame(
-                h, forbid_eoa=(t < min_frames or tail_left is not None),
-                text_temperature=text_temperature, text_topk=text_topk,
-                audio_temperature=audio_temperature, audio_topk=audio_topk,
+                h,
+                forbid_eoa=(t < min_frames or tail_left is not None),
+                text_temperature=text_temperature,
+                text_topk=text_topk,
+                audio_temperature=audio_temperature,
+                audio_topk=audio_topk,
                 audio_topp=audio_topp,
                 audio_repetition_penalty=audio_repetition_penalty,
-                seen_mask=seen_mask, cfg_scale=cfg_scale)
+                seen_mask=seen_mask,
+                cfg_scale=cfg_scale,
+            )
             if tail_left is None and ctrl == self.eoa_id:
                 tail_left = max(0, int(eoa_extra_frames))
             if (tail_left is not None and tail_left <= 0) or t >= max_frames:
@@ -441,8 +505,14 @@ class ZeroTTS:
                     break  # don't pay for a step whose output is discarded
 
             h, packed_kv, full_valid = self._prefix_step_frame(
-                codes[:, None, :], np.array([t], dtype=np.int64), packed_kv, full_valid,
-                n_voice=n_voice, cross_kv=cross_kv, text_valid=text_valid)
+                codes[:, None, :],
+                np.array([t], dtype=np.int64),
+                packed_kv,
+                full_valid,
+                n_voice=n_voice,
+                cross_kv=cross_kv,
+                text_valid=text_valid,
+            )
             t += 1
 
         if timing is not None:
@@ -452,12 +522,22 @@ class ZeroTTS:
 
     # ── public API ───────────────────────────────────────────────────────────
 
-    def synthesize(self, text: str, voice=None, cfg_scale: float = 1.0,
-                   text_temperature: float = 1.0, text_topk: int = 50,
-                   audio_temperature: float = 0.8, audio_topk: int = 25,
-                   audio_topp: float = 0.95, audio_repetition_penalty: float = 1.2,
-                   min_frames: int = 4, max_frames: int = DEFAULT_MAX_FRAMES,
-                   eoa_extra_frames: int = 1, timing: dict | None = None) -> np.ndarray:
+    def synthesize(
+        self,
+        text: str,
+        voice=None,
+        cfg_scale: float = 1.0,
+        text_temperature: float = 1.0,
+        text_topk: int = 50,
+        audio_temperature: float = 0.8,
+        audio_topk: int = 25,
+        audio_topp: float = 0.95,
+        audio_repetition_penalty: float = 1.2,
+        min_frames: int = 4,
+        max_frames: int = DEFAULT_MAX_FRAMES,
+        eoa_extra_frames: int = 1,
+        timing: dict | None = None,
+    ) -> np.ndarray:
         """Synthesize ``text``. Returns (1, T) float32 at ``self.sample_rate``.
 
         voice: a voice name, a :class:`~zerotts.voices.Voice`, a latent array, or
@@ -468,26 +548,46 @@ class ZeroTTS:
             raises WER and leaves more dead air.
         """
         voice_emb = self.resolve_voice(voice)
-        frames = list(self._generate_frames(
-            text, min_frames, max_frames, voice_emb=voice_emb, cfg_scale=cfg_scale,
-            text_temperature=text_temperature, text_topk=text_topk,
-            audio_temperature=audio_temperature, audio_topk=audio_topk,
-            audio_topp=audio_topp, audio_repetition_penalty=audio_repetition_penalty,
-            eoa_extra_frames=eoa_extra_frames, timing=timing))
+        frames = list(
+            self._generate_frames(
+                text,
+                min_frames,
+                max_frames,
+                voice_emb=voice_emb,
+                cfg_scale=cfg_scale,
+                text_temperature=text_temperature,
+                text_topk=text_topk,
+                audio_temperature=audio_temperature,
+                audio_topk=audio_topk,
+                audio_topp=audio_topp,
+                audio_repetition_penalty=audio_repetition_penalty,
+                eoa_extra_frames=eoa_extra_frames,
+                timing=timing,
+            )
+        )
 
         if not frames:
             return np.zeros((1, 0), dtype=np.float32)
         codes_out = np.stack(frames, axis=1)[0].transpose(1, 0)  # (K, T_gen)
         return self.codec.decode(codes_out[None, :, :])
 
-    def synthesize_stream(self, text: str, voice=None, cfg_scale: float = 1.0,
-                          text_temperature: float = 1.0, text_topk: int = 50,
-                          audio_temperature: float = 0.8, audio_topk: int = 25,
-                          audio_topp: float = 0.95,
-                          audio_repetition_penalty: float = 1.2,
-                          min_frames: int = 4, max_frames: int = DEFAULT_MAX_FRAMES,
-                          eoa_extra_frames: int = 1, first_chunk_frames: int = 1,
-                          max_chunk_frames: int = 16):
+    def synthesize_stream(
+        self,
+        text: str,
+        voice=None,
+        cfg_scale: float = 1.0,
+        text_temperature: float = 1.0,
+        text_topk: int = 50,
+        audio_temperature: float = 0.8,
+        audio_topk: int = 25,
+        audio_topp: float = 0.95,
+        audio_repetition_penalty: float = 1.2,
+        min_frames: int = 4,
+        max_frames: int = DEFAULT_MAX_FRAMES,
+        eoa_extra_frames: int = 1,
+        first_chunk_frames: int = 1,
+        max_chunk_frames: int = 16,
+    ):
         """Streaming synthesis — yields (1, chunk_samples) float32 chunks.
 
         The chunk schedule ramps: the first chunk is ``first_chunk_frames`` (low
@@ -507,9 +607,15 @@ class ZeroTTS:
 
         try:
             for frame_codes in self._generate_frames(
-                text, min_frames, max_frames, voice_emb=voice_emb, cfg_scale=cfg_scale,
-                text_temperature=text_temperature, text_topk=text_topk,
-                audio_temperature=audio_temperature, audio_topk=audio_topk,
+                text,
+                min_frames,
+                max_frames,
+                voice_emb=voice_emb,
+                cfg_scale=cfg_scale,
+                text_temperature=text_temperature,
+                text_topk=text_topk,
+                audio_temperature=audio_temperature,
+                audio_topk=audio_topk,
                 audio_topp=audio_topp,
                 audio_repetition_penalty=audio_repetition_penalty,
                 eoa_extra_frames=eoa_extra_frames,

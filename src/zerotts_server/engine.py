@@ -83,8 +83,8 @@ class ZeroTTSEngine:
         self._silence_frame = None
 
     def load(self) -> None:
-        from zerotts import ZeroTTS
-        from zerotts.voices import discover_packs, load_voice_dir
+        from zerotts_server.model.synthesizer import ZeroTTS
+        from zerotts_server.model.voices import discover_packs, load_voice_dir
 
         tts = ZeroTTS(self.model_dir, intra_op_num_threads=self.threads, warmup=False)
         tts.local_frame_decode_sess = _SeededSession(tts.local_frame_decode_sess)
@@ -136,7 +136,7 @@ class ZeroTTSEngine:
         A decoder per segment would restart the causal decoder's state and click at each
         boundary. Uses zerotts 0.1.5's frame generator, as its synthesize_stream does.
         """
-        from zerotts.synthesizer import DEFAULT_MAX_FRAMES
+        from zerotts_server.model.synthesizer import DEFAULT_MAX_FRAMES
 
         tts = self._tts
         voice_emb = tts.resolve_voice(self._voices[voice].emb)

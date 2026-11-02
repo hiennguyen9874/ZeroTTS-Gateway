@@ -10,7 +10,7 @@ Nothing needs them to run the gateway, the upstream or the default tests. Leave 
 
 ## What to read where
 
-- `ZeroTTS-repo`: source of the `zerotts==0.1.5` dependency (pin is five commits past `v0.1.5` with `src/zerotts/` unchanged; the installed package comes from PyPI). `src/zerotts/synthesizer.py` generation and streaming, `src/zerotts/chunking.py` sentence splitting, `webui/engine.py` multi-segment streaming, `docs/RUNTIME.md` / `docs/VOICES.md` graph and voice-pack contracts.
+- `ZeroTTS-repo`: source of the vendored `src/zerotts_server/model/` code (pin is five commits past `v0.1.5` with `src/zerotts/` unchanged). See `src/zerotts_server/model/VENDORED.md` for provenance and a file comparison command. `src/zerotts/synthesizer.py` generation and streaming, `src/zerotts/chunking.py` sentence splitting, `webui/engine.py` multi-segment streaming, `docs/RUNTIME.md` / `docs/VOICES.md` graph and voice-pack contracts.
 - `audio.cpp`: the API contract `zerotts_server` mirrors, not something to deploy (it cannot load ZeroTTS, ADR 0005). `app/server/api.md`, `app/server/README.md` for route schemas, errors, SSE and PCM streaming. ADR/report citations into `src/models/omnivoice/` stay valid at this pin.
 - `sea-g2p`: the chosen normalizer (ADR 0002); use `Normalizer("vi")`, not the G2P/phonemizer path. Read `python/` and `src/` when debugging mis-readings or known issues.
 - `vietnormalizer`: not a runtime normalizer; a source of loanword and acronym dictionaries for the lexicon (`vietnormalizer/data/*.csv`, larger list in `public/`).

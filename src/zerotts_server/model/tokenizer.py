@@ -52,16 +52,17 @@ def normalize_text(text: str) -> str:
 
 class BPEProcessor:
     """Args:
-        tokenizer: a tokenizers JSON path, the JSON string itself, or an
-            already-built ``tokenizers.Tokenizer``.
+    tokenizer: a tokenizers JSON path, the JSON string itself, or an
+        already-built ``tokenizers.Tokenizer``.
     """
 
     def __init__(self, tokenizer):
         from tokenizers import Tokenizer
 
         if tokenizer is None:
-            raise ValueError("BPEProcessor requires a tokenizer (JSON path, JSON string, "
-                             "or Tokenizer instance).")
+            raise ValueError(
+                "BPEProcessor requires a tokenizer (JSON path, JSON string, or Tokenizer instance)."
+            )
 
         if isinstance(tokenizer, Tokenizer):
             self._tok = tokenizer
@@ -81,7 +82,8 @@ class BPEProcessor:
                 raise ValueError(
                     f"tokenizer special id mismatch: {name} is {got}, must be {want}. "
                     f"The exported graphs hardcode these ids — this tokenizer does not "
-                    f"belong to these weights.")
+                    f"belong to these weights."
+                )
 
     @property
     def vocab_size(self) -> int:
@@ -123,7 +125,8 @@ def load_tokenizer(config: dict, model_dir: str | Path | None = None) -> BPEProc
     if fmt != "bpe":
         raise ValueError(
             f"text_format={fmt!r} is not supported — this package ships BPE only. "
-            f"A char-vocab export needs a different tokenizer than the one here.")
+            f"A char-vocab export needs a different tokenizer than the one here."
+        )
 
     inline = config.get("bpe_tokenizer")
     if inline:
@@ -136,4 +139,5 @@ def load_tokenizer(config: dict, model_dir: str | Path | None = None) -> BPEProc
 
     raise FileNotFoundError(
         "no tokenizer found: config.json has no inline 'bpe_tokenizer' and no "
-        "tokenizer.json sits beside it.")
+        "tokenizer.json sits beside it."
+    )

@@ -43,8 +43,7 @@ import numpy as np
 #: pointed at, so it survives the tab/process that installed it and is found by
 #: every later ``ZeroTTS``. Deliberately NOT inside the model directory: that is
 #: a cache of a read-only repo, and a re-download would take the voice with it.
-USER_VOICES_DIR = Path(
-    os.environ.get("ZEROTTS_VOICES_HOME") or "~/.zerotts/voices").expanduser()
+USER_VOICES_DIR = Path(os.environ.get("ZEROTTS_VOICES_HOME") or "~/.zerotts/voices").expanduser()
 
 
 @dataclass
@@ -52,7 +51,7 @@ class Voice:
     """A loaded voice pack."""
 
     name: str
-    emb: np.ndarray            # (1, n_voice_queries, d_model) float32
+    emb: np.ndarray  # (1, n_voice_queries, d_model) float32
     meta: dict
     preview_path: str | None = None
 
@@ -167,8 +166,8 @@ def install_voice_zip(zip_path: str | Path, dest_root: str | Path | None = None)
         packs = _zip_packs(archive, fallback_name=zip_path.stem)
         if not packs:
             raise FileNotFoundError(
-                f"{zip_path.name} holds no voice pack — expected a folder with a "
-                "voice.npz in it")
+                f"{zip_path.name} holds no voice pack — expected a folder with a voice.npz in it"
+            )
 
         installed = {}
         for name, files in packs.items():
@@ -209,13 +208,13 @@ def load_voice(voices_root: str | Path, name: str, expect_queries: int | None = 
     vdir = root / name
     if not is_voice_pack(vdir):
         available = list_voices(root)
-        raise FileNotFoundError(
-            f"no voice {name!r} in {root} (available: {available or 'none'})")
+        raise FileNotFoundError(f"no voice {name!r} in {root} (available: {available or 'none'})")
     return load_voice_dir(vdir, name, expect_queries=expect_queries)
 
 
-def load_voice_dir(vdir: str | Path, name: str | None = None,
-                   expect_queries: int | None = None) -> Voice:
+def load_voice_dir(
+    vdir: str | Path, name: str | None = None, expect_queries: int | None = None
+) -> Voice:
     """Load the voice pack in directory ``vdir``.
 
     The directory-addressed half of :func:`load_voice`, so a pack that lives
@@ -237,17 +236,20 @@ def load_voice_dir(vdir: str | Path, name: str | None = None,
     if stored_q != emb.shape[1]:
         raise ValueError(
             f"voice {name!r} is inconsistent: n_voice_queries={stored_q} but "
-            f"voice_emb has {emb.shape[1]} queries.")
+            f"voice_emb has {emb.shape[1]} queries."
+        )
     if expect_queries is not None and stored_q != expect_queries:
         raise ValueError(
             f"voice {name!r} was built with n_voice_queries={stored_q}, but this "
-            f"model uses {expect_queries}. It belongs to different weights.")
+            f"model uses {expect_queries}. It belongs to different weights."
+        )
 
     meta_path = vdir / "meta.json"
     meta = json.loads(meta_path.read_text()) if meta_path.exists() else {}
     preview = vdir / "preview.wav"
-    return Voice(name=name, emb=emb, meta=meta,
-                 preview_path=str(preview) if preview.exists() else None)
+    return Voice(
+        name=name, emb=emb, meta=meta, preview_path=str(preview) if preview.exists() else None
+    )
 
 
 def load_index(voices_root: str | Path) -> dict:
